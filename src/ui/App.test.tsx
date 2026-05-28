@@ -41,4 +41,20 @@ describe("App", () => {
 
     expect(await screen.findByText("Unable to load LaTeX engines.")).toBeInTheDocument();
   });
+
+  it("shows when a LaTeX engine detection times out", async () => {
+    vi.mocked(loadLatexEngines).mockResolvedValue([
+      {
+        id: "miktex",
+        label: "MiKTeX",
+        isDefault: true,
+        status: "missing",
+        statusReason: "timeout",
+      },
+    ]);
+
+    render(<App />);
+
+    expect(await screen.findByText("MiKTeX: Missing (version check timed out)")).toBeInTheDocument();
+  });
 });

@@ -44,6 +44,10 @@ export function App() {
       return "Missing (version check failed)";
     }
 
+    if (engine.statusReason === "timeout") {
+      return "Missing (version check timed out)";
+    }
+
     return "Missing";
   };
 

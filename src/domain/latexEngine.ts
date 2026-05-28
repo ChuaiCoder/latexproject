@@ -1,6 +1,6 @@
 export type LatexEngineId = string;
 export type LatexEngineStatus = "installed" | "missing";
-export type LatexEngineStatusReason = "available" | "notFound" | "failed";
+export type LatexEngineStatusReason = "available" | "notFound" | "failed" | "timeout";
 
 export interface LatexEngine {
   id: LatexEngineId;
