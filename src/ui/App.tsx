@@ -1,26 +1,31 @@
 import { useEffect, useState } from "react";
 import { Play } from "lucide-react";
-import { loadLatexEngines } from "../backend/latexBackend";
-import type { LatexEngine } from "../domain/latexEngine";
+import { compileLatexDocument, loadLatexCompilers } from "../backend/latexBackend";
+import type { CompileLatexDocumentResult, LatexCompiler } from "../domain/latexCompiler";
+
+const STARTER_DOCUMENT = "\\documentclass{article}\n\\begin{document}\nHello from LaTeX Workbench.\n\\end{document}\n";
 
 export function App() {
-  const [engines, setEngines] = useState<LatexEngine[]>([]);
-  const [engineError, setEngineError] = useState(false);
+  const [compilers, setCompilers] = useState<LatexCompiler[]>([]);
+  const [compilerError, setCompilerError] = useState(false);
+  const [compileResult, setCompileResult] = useState<CompileLatexDocumentResult | undefined>();
+  const [compileError, setCompileError] = useState(false);
+  const [isCompiling, setIsCompiling] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
 
-    loadLatexEngines()
-      .then((loadedEngines) => {
+    loadLatexCompilers()
+      .then((loadedCompilers) => {
         if (isMounted) {
-          setEngines(loadedEngines);
-          setEngineError(false);
+          setCompilers(loadedCompilers);
+          setCompilerError(false);
         }
       })
       .catch(() => {
         if (isMounted) {
-          setEngines([]);
-          setEngineError(true);
+          setCompilers([]);
+          setCompilerError(true);
         }
       });
 
@@ -29,26 +34,48 @@ export function App() {
     };
   }, []);
 
-  const defaultEngine = engines.find((engine) => engine.isDefault);
-  const engineSummary = engines.map((engine) => engine.label).join(", ");
-  const formatEngineStatus = (engine: LatexEngine) => {
-    if (engine.status === "installed") {
+  const defaultCompiler = compilers.find((compiler) => compiler.isDefault);
+  const compilerSummary = compilers.map((compiler) => compiler.label).join(", ");
+  const formatCompilerStatus = (compiler: LatexCompiler) => {
+    if (compiler.status === "installed") {
       return "Installed";
     }
 
-    if (engine.statusReason === "notFound") {
+    if (compiler.statusReason === "notFound") {
       return "Missing (not found on PATH)";
     }
 
-    if (engine.statusReason === "failed") {
+    if (compiler.statusReason === "failed") {
       return "Missing (version check failed)";
     }
 
-    if (engine.statusReason === "timeout") {
+    if (compiler.statusReason === "timeout") {
       return "Missing (version check timed out)";
     }
 
     return "Missing";
+  };
+
+  const handleCompile = async () => {
+    if (!defaultCompiler || isCompiling) {
+      return;
+    }
+
+    setIsCompiling(true);
+    setCompileError(false);
+    setCompileResult(undefined);
+
+    try {
+      const result = await compileLatexDocument({
+        compilerId: defaultCompiler.id,
+        source: STARTER_DOCUMENT,
+      });
+      setCompileResult(result);
+    } catch {
+      setCompileError(true);
+    } finally {
+      setIsCompiling(false);
+    }
   };
 
   return (
@@ -58,8 +85,13 @@ export function App() {
           <span className="brand-icon">T</span>
           <span>LaTeX Workbench</span>
         </div>
-        <button className="compile-button" type="button">
-          <Play size={16} aria-hidden="true" /> Compile
+        <button
+          className="compile-button"
+          type="button"
+          disabled={!defaultCompiler || isCompiling}
+          onClick={handleCompile}
+        >
+          <Play size={16} aria-hidden="true" /> {isCompiling ? "Compiling" : "Compile"}
         </button>
       </header>
 
@@ -76,23 +108,33 @@ export function App() {
           <div className="panel-header">Editor</div>
           <div className="editor-placeholder">
             <p className="muted">Editor adapter pending.</p>
-            {engineError ? (
-              <p role="status">Unable to load LaTeX engines.</p>
+            {compilerError ? (
+              <p role="status">Unable to load LaTeX compilers.</p>
             ) : (
               <>
-                <p>Default engine: {defaultEngine?.label ?? "Loading..."}</p>
-                {engineSummary ? <p>Available engines: {engineSummary}</p> : null}
-                {engines.length > 0 ? (
-                  <ul className="engine-status-list" aria-label="LaTeX engine status">
-                    {engines.map((engine) => (
-                      <li key={engine.id}>
-                        {engine.label}: {formatEngineStatus(engine)}
+                <p>Default compiler: {defaultCompiler?.label ?? "Loading..."}</p>
+                {compilerSummary ? <p>Available compilers: {compilerSummary}</p> : null}
+                {compilers.length > 0 ? (
+                  <ul className="compiler-status-list" aria-label="LaTeX compiler status">
+                    {compilers.map((compiler) => (
+                      <li key={compiler.id}>
+                        {compiler.label}: {formatCompilerStatus(compiler)}
                       </li>
                     ))}
                   </ul>
                 ) : null}
               </>
             )}
+            {compileError ? <p role="status">Compile request failed.</p> : null}
+            {compileResult?.success && compileResult.pdfPath ? (
+              <p role="status">Compile succeeded: {compileResult.pdfPath}</p>
+            ) : null}
+            {compileResult && !compileResult.success ? (
+              <div role="status">
+                <p>Compile failed.</p>
+                <pre>{compileResult.log}</pre>
+              </div>
+            ) : null}
           </div>
         </section>
 

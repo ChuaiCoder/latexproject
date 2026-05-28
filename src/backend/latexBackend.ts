@@ -1,17 +1,27 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { LatexEngine } from "../domain/latexEngine";
+import type {
+  CompileLatexDocumentRequest,
+  CompileLatexDocumentResult,
+  LatexCompiler,
+} from "../domain/latexCompiler";
 
-let latexEnginesRequest: Promise<LatexEngine[]> | undefined;
+let latexCompilersRequest: Promise<LatexCompiler[]> | undefined;
 
-export async function loadLatexEngines(): Promise<LatexEngine[]> {
-  latexEnginesRequest ??= invoke<LatexEngine[]>("available_latex_engines").catch((error) => {
-    latexEnginesRequest = undefined;
+export async function loadLatexCompilers(): Promise<LatexCompiler[]> {
+  latexCompilersRequest ??= invoke<LatexCompiler[]>("available_latex_compilers").catch((error) => {
+    latexCompilersRequest = undefined;
     throw error;
   });
 
-  return latexEnginesRequest;
+  return latexCompilersRequest;
 }
 
-export function resetLatexEnginesCacheForTests(): void {
-  latexEnginesRequest = undefined;
+export async function compileLatexDocument(
+  request: CompileLatexDocumentRequest,
+): Promise<CompileLatexDocumentResult> {
+  return invoke<CompileLatexDocumentResult>("compile_latex_document", { request });
+}
+
+export function resetLatexCompilersCacheForTests(): void {
+  latexCompilersRequest = undefined;
 }

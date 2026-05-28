@@ -124,7 +124,7 @@ button {
   color: #63737a;
 }
 
-.engine-status-list {
+.compiler-status-list {
   display: grid;
   gap: 4px;
   margin: 12px 0 0;
@@ -132,7 +132,7 @@ button {
   list-style: none;
 }
 
-.engine-status-list li {
+.compiler-status-list li {
   color: #293940;
   font-size: 14px;
 }

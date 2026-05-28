@@ -1,52 +1,53 @@
 mod latex;
 
 #[tauri::command]
-fn available_latex_engines() -> Vec<latex::LatexEngine> {
-    latex::available_engines()
+fn available_latex_compilers() -> Vec<latex::LatexCompiler> {
+    latex::available_compilers()
+}
+
+#[tauri::command]
+fn compile_latex_document(
+    request: latex::CompileLatexDocumentRequest,
+) -> Result<latex::CompileLatexDocumentResult, String> {
+    latex::compile_document(request)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![available_latex_engines])
+        .invoke_handler(tauri::generate_handler![
+            available_latex_compilers,
+            compile_latex_document
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{available_latex_engines, latex};
+    use super::{available_latex_compilers, latex};
 
     #[test]
-    fn exposes_supported_latex_engines() {
-        let engines = available_latex_engines();
+    fn exposes_supported_latex_compilers() {
+        let compilers = available_latex_compilers();
 
-        assert_eq!(engines.len(), 2);
-        assert_eq!(engines[0].id, "miktex");
-        assert_eq!(engines[0].label, "MiKTeX");
-        assert!(engines[0].is_default);
+        assert_eq!(compilers.len(), 4);
+        assert_eq!(compilers[0].id, "pdflatex");
+        assert_eq!(compilers[0].label, "pdfLaTeX");
+        assert!(compilers[0].is_default);
         assert!(matches!(
-            engines[0].status,
-            latex::LatexEngineStatus::Installed | latex::LatexEngineStatus::Missing
+            compilers[0].status,
+            latex::LatexCompilerStatus::Installed | latex::LatexCompilerStatus::Missing
         ));
         assert!(matches!(
-            engines[0].status_reason,
-            latex::LatexEngineStatusReason::Available
-                | latex::LatexEngineStatusReason::NotFound
-                | latex::LatexEngineStatusReason::Failed
+            compilers[0].status_reason,
+            latex::LatexCompilerStatusReason::Available
+                | latex::LatexCompilerStatusReason::NotFound
+                | latex::LatexCompilerStatusReason::Failed
+                | latex::LatexCompilerStatusReason::Timeout
         ));
-        assert_eq!(engines[1].id, "tectonic");
-        assert_eq!(engines[1].label, "Tectonic");
-        assert!(!engines[1].is_default);
-        assert!(matches!(
-            engines[1].status,
-            latex::LatexEngineStatus::Installed | latex::LatexEngineStatus::Missing
-        ));
-        assert!(matches!(
-            engines[1].status_reason,
-            latex::LatexEngineStatusReason::Available
-                | latex::LatexEngineStatusReason::NotFound
-                | latex::LatexEngineStatusReason::Failed
-        ));
+        assert_eq!(compilers[3].id, "tectonic");
+        assert_eq!(compilers[3].label, "Tectonic");
+        assert!(!compilers[3].is_default);
     }
 }

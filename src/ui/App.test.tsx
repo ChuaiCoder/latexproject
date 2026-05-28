@@ -1,20 +1,22 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { loadLatexEngines } from "../backend/latexBackend";
+import { compileLatexDocument, loadLatexCompilers } from "../backend/latexBackend";
 
 vi.mock("../backend/latexBackend", () => ({
-  loadLatexEngines: vi.fn(),
+  compileLatexDocument: vi.fn(),
+  loadLatexCompilers: vi.fn(),
 }));
 
 describe("App", () => {
   beforeEach(() => {
-    vi.mocked(loadLatexEngines).mockReset();
+    vi.mocked(compileLatexDocument).mockReset();
+    vi.mocked(loadLatexCompilers).mockReset();
   });
 
-  it("shows the workbench shell with the default LaTeX engine from the backend", async () => {
-    vi.mocked(loadLatexEngines).mockResolvedValue([
-      { id: "miktex", label: "MiKTeX", isDefault: true, status: "installed" },
+  it("shows the workbench shell with the default LaTeX compiler from the backend", async () => {
+    vi.mocked(loadLatexCompilers).mockResolvedValue([
+      { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" },
       {
         id: "xelatex",
         label: "XeLaTeX",
@@ -28,25 +30,25 @@ describe("App", () => {
 
     expect(screen.getByLabelText("LaTeX Workbench")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /compile/i })).toBeInTheDocument();
-    expect(await screen.findByText("Default engine: MiKTeX")).toBeInTheDocument();
-    expect(screen.getByText("Available engines: MiKTeX, XeLaTeX")).toBeInTheDocument();
-    expect(screen.getByText("MiKTeX: Installed")).toBeInTheDocument();
+    expect(await screen.findByText("Default compiler: pdfLaTeX")).toBeInTheDocument();
+    expect(screen.getByText("Available compilers: pdfLaTeX, XeLaTeX")).toBeInTheDocument();
+    expect(screen.getByText("pdfLaTeX: Installed")).toBeInTheDocument();
     expect(screen.getByText("XeLaTeX: Missing (not found on PATH)")).toBeInTheDocument();
   });
 
-  it("shows a backend error when LaTeX engines cannot be loaded", async () => {
-    vi.mocked(loadLatexEngines).mockRejectedValue(new Error("backend unavailable"));
+  it("shows a backend error when LaTeX compilers cannot be loaded", async () => {
+    vi.mocked(loadLatexCompilers).mockRejectedValue(new Error("backend unavailable"));
 
     render(<App />);
 
-    expect(await screen.findByText("Unable to load LaTeX engines.")).toBeInTheDocument();
+    expect(await screen.findByText("Unable to load LaTeX compilers.")).toBeInTheDocument();
   });
 
-  it("shows when a LaTeX engine detection times out", async () => {
-    vi.mocked(loadLatexEngines).mockResolvedValue([
+  it("shows when a LaTeX compiler detection times out", async () => {
+    vi.mocked(loadLatexCompilers).mockResolvedValue([
       {
-        id: "miktex",
-        label: "MiKTeX",
+        id: "pdflatex",
+        label: "pdfLaTeX",
         isDefault: true,
         status: "missing",
         statusReason: "timeout",
@@ -55,6 +57,48 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(await screen.findByText("MiKTeX: Missing (version check timed out)")).toBeInTheDocument();
+    expect(await screen.findByText("pdfLaTeX: Missing (version check timed out)")).toBeInTheDocument();
+  });
+
+  it("compiles the starter document with the default compiler", async () => {
+    vi.mocked(loadLatexCompilers).mockResolvedValue([
+      { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" },
+    ]);
+    vi.mocked(compileLatexDocument).mockResolvedValue({
+      success: true,
+      log: "compiled",
+      pdfPath: "C:\\tmp\\main.pdf",
+    });
+
+    render(<App />);
+
+    await screen.findByText("Default compiler: pdfLaTeX");
+    fireEvent.click(screen.getByRole("button", { name: /compile/i }));
+
+    await waitFor(() => {
+      expect(compileLatexDocument).toHaveBeenCalledWith({
+        compilerId: "pdflatex",
+        source: expect.stringContaining("\\documentclass{article}"),
+      });
+    });
+    expect(await screen.findByText("Compile succeeded: C:\\tmp\\main.pdf")).toBeInTheDocument();
+  });
+
+  it("shows compile failures from the backend", async () => {
+    vi.mocked(loadLatexCompilers).mockResolvedValue([
+      { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" },
+    ]);
+    vi.mocked(compileLatexDocument).mockResolvedValue({
+      success: false,
+      log: "! Undefined control sequence.",
+    });
+
+    render(<App />);
+
+    await screen.findByText("Default compiler: pdfLaTeX");
+    fireEvent.click(screen.getByRole("button", { name: /compile/i }));
+
+    expect(await screen.findByText("Compile failed.")).toBeInTheDocument();
+    expect(screen.getByText("! Undefined control sequence.")).toBeInTheDocument();
   });
 });

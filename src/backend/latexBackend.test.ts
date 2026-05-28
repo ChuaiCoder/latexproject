@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadLatexEngines, resetLatexEnginesCacheForTests } from "./latexBackend";
+import {
+  compileLatexDocument,
+  loadLatexCompilers,
+  resetLatexCompilersCacheForTests,
+} from "./latexBackend";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -9,13 +13,13 @@ const { invoke } = await import("@tauri-apps/api/core");
 
 describe("latex backend client", () => {
   beforeEach(() => {
-    resetLatexEnginesCacheForTests();
+    resetLatexCompilersCacheForTests();
     vi.mocked(invoke).mockReset();
   });
 
-  it("loads LaTeX engines through the Tauri command boundary", async () => {
+  it("loads LaTeX compilers through the Tauri command boundary", async () => {
     vi.mocked(invoke).mockResolvedValue([
-      { id: "miktex", label: "MiKTeX", isDefault: true, status: "installed" },
+      { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" },
       {
         id: "xelatex",
         label: "XeLaTeX",
@@ -25,11 +29,11 @@ describe("latex backend client", () => {
       },
     ]);
 
-    const engines = await loadLatexEngines();
+    const compilers = await loadLatexCompilers();
 
-    expect(invoke).toHaveBeenCalledWith("available_latex_engines");
-    expect(engines).toEqual([
-      { id: "miktex", label: "MiKTeX", isDefault: true, status: "installed" },
+    expect(invoke).toHaveBeenCalledWith("available_latex_compilers");
+    expect(compilers).toEqual([
+      { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" },
       {
         id: "xelatex",
         label: "XeLaTeX",
@@ -40,33 +44,58 @@ describe("latex backend client", () => {
     ]);
   });
 
-  it("reuses an in-flight LaTeX engine request", async () => {
-    const backendEngines = [
-      { id: "miktex", label: "MiKTeX", isDefault: true, status: "installed" as const },
+  it("reuses an in-flight LaTeX compiler request", async () => {
+    const backendCompilers = [
+      { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" as const },
     ];
-    vi.mocked(invoke).mockResolvedValue(backendEngines);
+    vi.mocked(invoke).mockResolvedValue(backendCompilers);
 
     const [firstResult, secondResult] = await Promise.all([
-      loadLatexEngines(),
-      loadLatexEngines(),
+      loadLatexCompilers(),
+      loadLatexCompilers(),
     ]);
 
     expect(invoke).toHaveBeenCalledTimes(1);
-    expect(firstResult).toEqual(backendEngines);
-    expect(secondResult).toEqual(backendEngines);
+    expect(firstResult).toEqual(backendCompilers);
+    expect(secondResult).toEqual(backendCompilers);
   });
 
-  it("clears the cached request after a backend failure", async () => {
-    const backendEngines = [
-      { id: "miktex", label: "MiKTeX", isDefault: true, status: "installed" as const },
+  it("clears the cached compiler request after a backend failure", async () => {
+    const backendCompilers = [
+      { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" as const },
     ];
     vi.mocked(invoke)
       .mockRejectedValueOnce(new Error("backend unavailable"))
-      .mockResolvedValueOnce(backendEngines);
+      .mockResolvedValueOnce(backendCompilers);
 
-    await expect(loadLatexEngines()).rejects.toThrow("backend unavailable");
-    await expect(loadLatexEngines()).resolves.toEqual(backendEngines);
+    await expect(loadLatexCompilers()).rejects.toThrow("backend unavailable");
+    await expect(loadLatexCompilers()).resolves.toEqual(backendCompilers);
 
     expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends a LaTeX document compile request through the Tauri command boundary", async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      success: true,
+      log: "compiled",
+      pdfPath: "C:\\tmp\\main.pdf",
+    });
+
+    const result = await compileLatexDocument({
+      compilerId: "pdflatex",
+      source: "\\documentclass{article}\\begin{document}Hi\\end{document}",
+    });
+
+    expect(invoke).toHaveBeenCalledWith("compile_latex_document", {
+      request: {
+        compilerId: "pdflatex",
+        source: "\\documentclass{article}\\begin{document}Hi\\end{document}",
+      },
+    });
+    expect(result).toEqual({
+      success: true,
+      log: "compiled",
+      pdfPath: "C:\\tmp\\main.pdf",
+    });
   });
 });

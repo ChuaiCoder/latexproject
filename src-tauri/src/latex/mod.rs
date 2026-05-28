@@ -1,19 +1,21 @@
+use std::fs;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum LatexEngineStatus {
+pub enum LatexCompilerStatus {
     Installed,
     Missing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum LatexEngineStatusReason {
+pub enum LatexCompilerStatusReason {
     Available,
     NotFound,
     Failed,
@@ -22,54 +24,106 @@ pub enum LatexEngineStatusReason {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LatexEngine {
+pub struct LatexCompiler {
     pub id: &'static str,
     pub label: &'static str,
     pub is_default: bool,
-    pub status: LatexEngineStatus,
-    pub status_reason: LatexEngineStatusReason,
+    pub status: LatexCompilerStatus,
+    pub status_reason: LatexCompilerStatusReason,
 }
 
-struct LatexEngineDefinition {
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompileLatexDocumentRequest {
+    pub compiler_id: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompileLatexDocumentResult {
+    pub success: bool,
+    pub log: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf_path: Option<String>,
+}
+
+struct LatexCompilerDefinition {
     id: &'static str,
     label: &'static str,
     is_default: bool,
     command: &'static str,
+    args: &'static [&'static str],
 }
 
-const LATEX_ENGINE_DEFINITIONS: &[LatexEngineDefinition] = &[
-    LatexEngineDefinition {
-        id: "miktex",
-        label: "MiKTeX",
+const LATEX_COMPILER_DEFINITIONS: &[LatexCompilerDefinition] = &[
+    LatexCompilerDefinition {
+        id: "pdflatex",
+        label: "pdfLaTeX",
         is_default: true,
-        command: "miktex",
+        command: "pdflatex",
+        args: &["-interaction=nonstopmode", "-halt-on-error", "main.tex"],
     },
-    LatexEngineDefinition {
+    LatexCompilerDefinition {
+        id: "xelatex",
+        label: "XeLaTeX",
+        is_default: false,
+        command: "xelatex",
+        args: &["-interaction=nonstopmode", "-halt-on-error", "main.tex"],
+    },
+    LatexCompilerDefinition {
+        id: "lualatex",
+        label: "LuaLaTeX",
+        is_default: false,
+        command: "lualatex",
+        args: &["-interaction=nonstopmode", "-halt-on-error", "main.tex"],
+    },
+    LatexCompilerDefinition {
         id: "tectonic",
         label: "Tectonic",
         is_default: false,
         command: "tectonic",
+        args: &["main.tex"],
     },
 ];
 
-pub fn available_engines() -> Vec<LatexEngine> {
-    detect_engines(LATEX_ENGINE_DEFINITIONS)
+pub fn available_compilers() -> Vec<LatexCompiler> {
+    detect_compilers(LATEX_COMPILER_DEFINITIONS)
+}
+
+pub fn compile_document(
+    request: CompileLatexDocumentRequest,
+) -> Result<CompileLatexDocumentResult, String> {
+    let compiler = LATEX_COMPILER_DEFINITIONS
+        .iter()
+        .find(|compiler| compiler.id == request.compiler_id)
+        .ok_or_else(|| format!("Unsupported LaTeX compiler: {}", request.compiler_id))?;
+    let working_dir = unique_working_dir()?;
+
+    compile_document_with(
+        request.compiler_id.as_str(),
+        request.source.as_str(),
+        &working_dir,
+        compiler.command,
+        compiler.args,
+        Duration::from_secs(20),
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct EngineDetection {
-    status: LatexEngineStatus,
-    reason: LatexEngineStatusReason,
+    status: LatexCompilerStatus,
+    reason: LatexCompilerStatusReason,
 }
 
-fn detect_engines(definitions: &'static [LatexEngineDefinition]) -> Vec<LatexEngine> {
-    detect_engines_with(definitions, detect_engine)
+fn detect_compilers(definitions: &'static [LatexCompilerDefinition]) -> Vec<LatexCompiler> {
+    detect_compilers_with(definitions, detect_compiler)
 }
 
-fn detect_engines_with(
-    definitions: &'static [LatexEngineDefinition],
+fn detect_compilers_with(
+    definitions: &'static [LatexCompilerDefinition],
     detect: impl Fn(&str) -> EngineDetection + Copy + Send + Sync,
-) -> Vec<LatexEngine> {
+) -> Vec<LatexCompiler> {
     thread::scope(|scope| {
         let detection_handles = definitions
             .iter()
@@ -77,7 +131,7 @@ fn detect_engines_with(
                 scope.spawn(move || {
                     let detection = detect(definition.command);
 
-                    LatexEngine {
+                    LatexCompiler {
                         id: definition.id,
                         label: definition.label,
                         is_default: definition.is_default,
@@ -90,16 +144,20 @@ fn detect_engines_with(
 
         detection_handles
             .into_iter()
-            .map(|handle| handle.join().expect("LaTeX engine detection panicked"))
+            .map(|handle| handle.join().expect("LaTeX compiler detection panicked"))
             .collect()
     })
 }
 
-fn detect_engine(command: &str) -> EngineDetection {
-    detect_engine_with_timeout(command, &["--version"], Duration::from_millis(800))
+fn detect_compiler(command: &str) -> EngineDetection {
+    detect_compiler_with_timeout(command, &["--version"], Duration::from_millis(800))
 }
 
-fn detect_engine_with_timeout(command: &str, args: &[&str], timeout: Duration) -> EngineDetection {
+fn detect_compiler_with_timeout(
+    command: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> EngineDetection {
     let mut child = match Command::new(command)
         .args(args)
         .stdout(Stdio::null())
@@ -109,14 +167,14 @@ fn detect_engine_with_timeout(command: &str, args: &[&str], timeout: Duration) -
         Ok(child) => child,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return EngineDetection {
-                status: LatexEngineStatus::Missing,
-                reason: LatexEngineStatusReason::NotFound,
+                status: LatexCompilerStatus::Missing,
+                reason: LatexCompilerStatusReason::NotFound,
             };
         }
         Err(_) => {
             return EngineDetection {
-                status: LatexEngineStatus::Missing,
-                reason: LatexEngineStatusReason::Failed,
+                status: LatexCompilerStatus::Missing,
+                reason: LatexCompilerStatusReason::Failed,
             };
         }
     };
@@ -127,22 +185,22 @@ fn detect_engine_with_timeout(command: &str, args: &[&str], timeout: Duration) -
         match child.try_wait() {
             Ok(Some(status)) if status.success() => {
                 return EngineDetection {
-                    status: LatexEngineStatus::Installed,
-                    reason: LatexEngineStatusReason::Available,
+                    status: LatexCompilerStatus::Installed,
+                    reason: LatexCompilerStatusReason::Available,
                 };
             }
             Ok(Some(_)) => {
                 return EngineDetection {
-                    status: LatexEngineStatus::Missing,
-                    reason: LatexEngineStatusReason::Failed,
+                    status: LatexCompilerStatus::Missing,
+                    reason: LatexCompilerStatusReason::Failed,
                 };
             }
             Ok(None) if started_at.elapsed() >= timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
                 return EngineDetection {
-                    status: LatexEngineStatus::Missing,
-                    reason: LatexEngineStatusReason::Timeout,
+                    status: LatexCompilerStatus::Missing,
+                    reason: LatexCompilerStatusReason::Timeout,
                 };
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
@@ -150,65 +208,221 @@ fn detect_engine_with_timeout(command: &str, args: &[&str], timeout: Duration) -
                 let _ = child.kill();
                 let _ = child.wait();
                 return EngineDetection {
-                    status: LatexEngineStatus::Missing,
-                    reason: LatexEngineStatusReason::Failed,
+                    status: LatexCompilerStatus::Missing,
+                    reason: LatexCompilerStatusReason::Failed,
                 };
             }
         }
     }
 }
 
+fn compile_document_with(
+    _compiler_id: &str,
+    source: &str,
+    working_dir: &Path,
+    command: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<CompileLatexDocumentResult, String> {
+    fs::create_dir_all(working_dir).map_err(|error| error.to_string())?;
+    fs::write(working_dir.join("main.tex"), source).map_err(|error| error.to_string())?;
+
+    let mut child = Command::new(command)
+        .args(args)
+        .current_dir(working_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+
+    let started_at = Instant::now();
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| error.to_string())?;
+                let log = format_process_log(&output.stdout, &output.stderr);
+                let pdf_path = working_dir.join("main.pdf");
+
+                return Ok(CompileLatexDocumentResult {
+                    success: output.status.success() && pdf_path.exists(),
+                    log,
+                    pdf_path: pdf_path
+                        .exists()
+                        .then(|| pdf_path.to_string_lossy().into_owned()),
+                });
+            }
+            Ok(None) if started_at.elapsed() >= timeout => {
+                let _ = child.kill();
+                let output = child
+                    .wait_with_output()
+                    .map_err(|error| error.to_string())?;
+                let log = format_process_log(&output.stdout, &output.stderr);
+
+                return Ok(CompileLatexDocumentResult {
+                    success: false,
+                    log: if log.is_empty() {
+                        "Compile timed out.".to_string()
+                    } else {
+                        format!("Compile timed out.\n{log}")
+                    },
+                    pdf_path: None,
+                });
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error.to_string());
+            }
+        }
+    }
+}
+
+fn format_process_log(stdout: &[u8], stderr: &[u8]) -> String {
+    let mut log = String::new();
+    log.push_str(&String::from_utf8_lossy(stdout));
+    log.push_str(&String::from_utf8_lossy(stderr));
+    log
+}
+
+fn unique_working_dir() -> Result<std::path::PathBuf, String> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_millis();
+
+    Ok(std::env::temp_dir().join(format!(
+        "latex-workbench-{}-{timestamp}",
+        std::process::id()
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_engine_with_timeout, detect_engines_with, EngineDetection, LatexEngineDefinition,
-        LatexEngineStatus, LatexEngineStatusReason,
+        compile_document_with, detect_compiler_with_timeout, detect_compilers_with,
+        EngineDetection, LatexCompilerDefinition, LatexCompilerStatus, LatexCompilerStatusReason,
     };
+    use std::fs;
     use std::thread;
     use std::time::{Duration, Instant};
 
     #[test]
-    fn marks_engine_detection_as_missing_when_version_check_times_out() {
+    fn marks_compiler_detection_as_missing_when_version_check_times_out() {
         let started_at = Instant::now();
-        let detection = detect_engine_with_timeout(
+        let detection = detect_compiler_with_timeout(
             slow_command(),
             slow_command_args(),
             Duration::from_millis(50),
         );
 
-        assert_eq!(detection.status, LatexEngineStatus::Missing);
-        assert_eq!(detection.reason, LatexEngineStatusReason::Timeout);
+        assert_eq!(detection.status, LatexCompilerStatus::Missing);
+        assert_eq!(detection.reason, LatexCompilerStatusReason::Timeout);
         assert!(started_at.elapsed() < Duration::from_secs(1));
     }
 
     #[test]
-    fn detects_latex_engines_concurrently() {
-        static DEFINITIONS: &[LatexEngineDefinition] = &[
-            LatexEngineDefinition {
+    fn detects_latex_compilers_concurrently() {
+        static DEFINITIONS: &[LatexCompilerDefinition] = &[
+            LatexCompilerDefinition {
                 id: "slow-a",
                 label: "Slow A",
                 is_default: true,
                 command: "slow-a",
+                args: &["main.tex"],
             },
-            LatexEngineDefinition {
+            LatexCompilerDefinition {
                 id: "slow-b",
                 label: "Slow B",
                 is_default: false,
                 command: "slow-b",
+                args: &["main.tex"],
             },
         ];
 
         let started_at = Instant::now();
-        let engines = detect_engines_with(DEFINITIONS, |_| {
+        let compilers = detect_compilers_with(DEFINITIONS, |_| {
             thread::sleep(Duration::from_millis(200));
             EngineDetection {
-                status: LatexEngineStatus::Installed,
-                reason: LatexEngineStatusReason::Available,
+                status: LatexCompilerStatus::Installed,
+                reason: LatexCompilerStatusReason::Available,
             }
         });
 
-        assert_eq!(engines.len(), 2);
+        assert_eq!(compilers.len(), 2);
         assert!(started_at.elapsed() < Duration::from_millis(350));
+    }
+
+    #[test]
+    fn exposes_real_latex_compilers_not_distributions() {
+        let compilers = super::available_compilers();
+
+        assert_eq!(
+            compilers
+                .iter()
+                .map(|compiler| compiler.id)
+                .collect::<Vec<_>>(),
+            vec!["pdflatex", "xelatex", "lualatex", "tectonic"]
+        );
+        assert_eq!(compilers[0].label, "pdfLaTeX");
+        assert!(compilers[0].is_default);
+    }
+
+    #[test]
+    fn compiles_document_and_returns_pdf_path_when_compiler_succeeds() {
+        let temp_dir = unique_temp_dir("success");
+
+        let result = compile_document_with(
+            "pdflatex",
+            "\\documentclass{article}\\begin{document}Hi\\end{document}",
+            &temp_dir,
+            fake_success_compiler(),
+            fake_success_args(),
+            Duration::from_secs(1),
+        )
+        .expect("compile request should complete");
+
+        assert!(result.success);
+        assert!(result
+            .pdf_path
+            .expect("expected pdf path")
+            .ends_with("main.pdf"));
+        assert!(result.log.contains("compiled"));
+        assert!(temp_dir.join("main.tex").exists());
+        assert!(temp_dir.join("main.pdf").exists());
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn returns_compiler_log_when_compile_fails() {
+        let temp_dir = unique_temp_dir("failure");
+
+        let result = compile_document_with(
+            "pdflatex",
+            "\\documentclass{article}\\begin{document}\\bad\\end{document}",
+            &temp_dir,
+            fake_failure_compiler(),
+            fake_failure_args(),
+            Duration::from_secs(1),
+        )
+        .expect("compile request should complete");
+
+        assert!(!result.success);
+        assert!(result.pdf_path.is_none());
+        assert!(result.log.contains("Undefined control sequence"));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    fn unique_temp_dir(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "latex-workbench-test-{name}-{}",
+            std::process::id()
+        ))
     }
 
     #[cfg(windows)]
@@ -221,6 +435,34 @@ mod tests {
         &["-NoProfile", "-Command", "Start-Sleep -Seconds 2"]
     }
 
+    #[cfg(windows)]
+    fn fake_success_compiler() -> &'static str {
+        "powershell"
+    }
+
+    #[cfg(windows)]
+    fn fake_success_args() -> &'static [&'static str] {
+        &[
+            "-NoProfile",
+            "-Command",
+            "Set-Content -LiteralPath main.pdf -Value 'PDF'; Write-Output 'compiled'",
+        ]
+    }
+
+    #[cfg(windows)]
+    fn fake_failure_compiler() -> &'static str {
+        "powershell"
+    }
+
+    #[cfg(windows)]
+    fn fake_failure_args() -> &'static [&'static str] {
+        &[
+            "-NoProfile",
+            "-Command",
+            "Write-Output 'Undefined control sequence'; exit 1",
+        ]
+    }
+
     #[cfg(not(windows))]
     fn slow_command() -> &'static str {
         "sh"
@@ -229,5 +471,25 @@ mod tests {
     #[cfg(not(windows))]
     fn slow_command_args() -> &'static [&'static str] {
         &["-c", "sleep 2"]
+    }
+
+    #[cfg(not(windows))]
+    fn fake_success_compiler() -> &'static str {
+        "sh"
+    }
+
+    #[cfg(not(windows))]
+    fn fake_success_args() -> &'static [&'static str] {
+        &["-c", "printf PDF > main.pdf; echo compiled"]
+    }
+
+    #[cfg(not(windows))]
+    fn fake_failure_compiler() -> &'static str {
+        "sh"
+    }
+
+    #[cfg(not(windows))]
+    fn fake_failure_args() -> &'static [&'static str] {
+        &["-c", "echo Undefined control sequence; exit 1"]
     }
 }
