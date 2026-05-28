@@ -3,8 +3,8 @@ dist/
 dist-ssr/
 target/
 src-tauri/target/
+src-tauri/gen/
 *.log
 .env
 .env.*
 !.env.example
-
