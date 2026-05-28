@@ -1,7 +1,37 @@
+import { useEffect, useState } from "react";
 import { Play } from "lucide-react";
-import { DEFAULT_ENGINE_ID } from "../domain/latexEngine";
+import { loadLatexEngines } from "../backend/latexBackend";
+import type { LatexEngine } from "../domain/latexEngine";
 
 export function App() {
+  const [engines, setEngines] = useState<LatexEngine[]>([]);
+  const [engineError, setEngineError] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    loadLatexEngines()
+      .then((loadedEngines) => {
+        if (isMounted) {
+          setEngines(loadedEngines);
+          setEngineError(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setEngines([]);
+          setEngineError(true);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const defaultEngine = engines.find((engine) => engine.isDefault);
+  const engineSummary = engines.map((engine) => engine.label).join(", ");
+
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -27,7 +57,14 @@ export function App() {
           <div className="panel-header">Editor</div>
           <div className="editor-placeholder">
             <p className="muted">Editor adapter pending.</p>
-            <p>Default engine: {DEFAULT_ENGINE_ID}</p>
+            {engineError ? (
+              <p role="status">Unable to load LaTeX engines.</p>
+            ) : (
+              <>
+                <p>Default engine: {defaultEngine?.label ?? "Loading..."}</p>
+                {engineSummary ? <p>Available engines: {engineSummary}</p> : null}
+              </>
+            )}
           </div>
         </section>
 
@@ -41,4 +78,3 @@ export function App() {
     </main>
   );
 }
-
