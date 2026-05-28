@@ -15,7 +15,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::available_latex_engines;
+    use super::{available_latex_engines, latex};
 
     #[test]
     fn exposes_supported_latex_engines() {
@@ -25,8 +25,16 @@ mod tests {
         assert_eq!(engines[0].id, "miktex");
         assert_eq!(engines[0].label, "MiKTeX");
         assert!(engines[0].is_default);
+        assert!(matches!(
+            engines[0].status,
+            latex::LatexEngineStatus::Installed | latex::LatexEngineStatus::Missing
+        ));
         assert_eq!(engines[1].id, "tectonic");
         assert_eq!(engines[1].label, "Tectonic");
         assert!(!engines[1].is_default);
+        assert!(matches!(
+            engines[1].status,
+            latex::LatexEngineStatus::Installed | latex::LatexEngineStatus::Missing
+        ));
     }
 }

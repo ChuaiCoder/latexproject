@@ -14,8 +14,8 @@ describe("App", () => {
 
   it("shows the workbench shell with the default LaTeX engine from the backend", async () => {
     vi.mocked(loadLatexEngines).mockResolvedValue([
-      { id: "miktex", label: "MiKTeX", isDefault: true },
-      { id: "tectonic", label: "Tectonic", isDefault: false },
+      { id: "miktex", label: "MiKTeX", isDefault: true, status: "installed" },
+      { id: "tectonic", label: "Tectonic", isDefault: false, status: "missing" },
     ]);
 
     render(<App />);
@@ -24,6 +24,8 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: /compile/i })).toBeInTheDocument();
     expect(await screen.findByText("Default engine: MiKTeX")).toBeInTheDocument();
     expect(screen.getByText("Available engines: MiKTeX, Tectonic")).toBeInTheDocument();
+    expect(screen.getByText("MiKTeX: Installed")).toBeInTheDocument();
+    expect(screen.getByText("Tectonic: Missing")).toBeInTheDocument();
   });
 
   it("shows a backend error when LaTeX engines cannot be loaded", async () => {

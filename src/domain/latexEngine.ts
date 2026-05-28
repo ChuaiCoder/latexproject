@@ -1,9 +1,11 @@
 export type LatexEngineId = "miktex" | "tectonic";
+export type LatexEngineStatus = "installed" | "missing";
 
 export interface LatexEngine {
   id: LatexEngineId;
   label: string;
   isDefault: boolean;
+  status: LatexEngineStatus;
 }
 
 export const DEFAULT_ENGINE_ID: LatexEngineId = "miktex";

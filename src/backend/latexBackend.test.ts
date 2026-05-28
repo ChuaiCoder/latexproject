@@ -14,17 +14,16 @@ describe("latex backend client", () => {
 
   it("loads LaTeX engines through the Tauri command boundary", async () => {
     vi.mocked(invoke).mockResolvedValue([
-      { id: "miktex", label: "MiKTeX", isDefault: true },
-      { id: "tectonic", label: "Tectonic", isDefault: false },
+      { id: "miktex", label: "MiKTeX", isDefault: true, status: "installed" },
+      { id: "tectonic", label: "Tectonic", isDefault: false, status: "missing" },
     ]);
 
     const engines = await loadLatexEngines();
 
     expect(invoke).toHaveBeenCalledWith("available_latex_engines");
     expect(engines).toEqual([
-      { id: "miktex", label: "MiKTeX", isDefault: true },
-      { id: "tectonic", label: "Tectonic", isDefault: false },
+      { id: "miktex", label: "MiKTeX", isDefault: true, status: "installed" },
+      { id: "tectonic", label: "Tectonic", isDefault: false, status: "missing" },
     ]);
   });
 });
-

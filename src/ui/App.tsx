@@ -31,6 +31,8 @@ export function App() {
 
   const defaultEngine = engines.find((engine) => engine.isDefault);
   const engineSummary = engines.map((engine) => engine.label).join(", ");
+  const formatEngineStatus = (engine: LatexEngine) =>
+    engine.status === "installed" ? "Installed" : "Missing";
 
   return (
     <main className="app-shell">
@@ -63,6 +65,15 @@ export function App() {
               <>
                 <p>Default engine: {defaultEngine?.label ?? "Loading..."}</p>
                 {engineSummary ? <p>Available engines: {engineSummary}</p> : null}
+                {engines.length > 0 ? (
+                  <ul className="engine-status-list" aria-label="LaTeX engine status">
+                    {engines.map((engine) => (
+                      <li key={engine.id}>
+                        {engine.label}: {formatEngineStatus(engine)}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </>
             )}
           </div>

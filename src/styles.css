@@ -124,6 +124,19 @@ button {
   color: #63737a;
 }
 
+.engine-status-list {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.engine-status-list li {
+  color: #293940;
+  font-size: 14px;
+}
+
 @media (max-width: 900px) {
   .workspace {
     grid-template-columns: 1fr;
@@ -137,4 +150,3 @@ button {
     border-bottom: 1px solid #d9e1e5;
   }
 }
-
