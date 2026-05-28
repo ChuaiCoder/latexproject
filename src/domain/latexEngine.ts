@@ -1,4 +1,4 @@
-export type LatexEngineId = "miktex" | "tectonic";
+export type LatexEngineId = string;
 export type LatexEngineStatus = "installed" | "missing";
 export type LatexEngineStatusReason = "available" | "notFound" | "failed";
 
@@ -13,11 +13,11 @@ export interface LatexEngine {
 export function getPreferredEngine(
   preference: string | null | undefined,
   availableEngineIds: LatexEngineId[],
-): LatexEngineId {
+): LatexEngineId | undefined {
   const [fallbackEngine] = availableEngineIds;
 
-  if (preference && availableEngineIds.includes(preference as LatexEngineId)) {
-    return preference as LatexEngineId;
+  if (preference && availableEngineIds.includes(preference)) {
+    return preference;
   }
 
   return fallbackEngine;

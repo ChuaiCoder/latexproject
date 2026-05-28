@@ -16,8 +16,8 @@ describe("App", () => {
     vi.mocked(loadLatexEngines).mockResolvedValue([
       { id: "miktex", label: "MiKTeX", isDefault: true, status: "installed" },
       {
-        id: "tectonic",
-        label: "Tectonic",
+        id: "xelatex",
+        label: "XeLaTeX",
         isDefault: false,
         status: "missing",
         statusReason: "notFound",
@@ -29,9 +29,9 @@ describe("App", () => {
     expect(screen.getByLabelText("LaTeX Workbench")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /compile/i })).toBeInTheDocument();
     expect(await screen.findByText("Default engine: MiKTeX")).toBeInTheDocument();
-    expect(screen.getByText("Available engines: MiKTeX, Tectonic")).toBeInTheDocument();
+    expect(screen.getByText("Available engines: MiKTeX, XeLaTeX")).toBeInTheDocument();
     expect(screen.getByText("MiKTeX: Installed")).toBeInTheDocument();
-    expect(screen.getByText("Tectonic: Missing (not found on PATH)")).toBeInTheDocument();
+    expect(screen.getByText("XeLaTeX: Missing (not found on PATH)")).toBeInTheDocument();
   });
 
   it("shows a backend error when LaTeX engines cannot be loaded", async () => {

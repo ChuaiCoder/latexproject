@@ -16,8 +16,8 @@ describe("latex backend client", () => {
     vi.mocked(invoke).mockResolvedValue([
       { id: "miktex", label: "MiKTeX", isDefault: true, status: "installed" },
       {
-        id: "tectonic",
-        label: "Tectonic",
+        id: "xelatex",
+        label: "XeLaTeX",
         isDefault: false,
         status: "missing",
         statusReason: "notFound",
@@ -30,8 +30,8 @@ describe("latex backend client", () => {
     expect(engines).toEqual([
       { id: "miktex", label: "MiKTeX", isDefault: true, status: "installed" },
       {
-        id: "tectonic",
-        label: "Tectonic",
+        id: "xelatex",
+        label: "XeLaTeX",
         isDefault: false,
         status: "missing",
         statusReason: "notFound",
