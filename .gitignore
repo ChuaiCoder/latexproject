@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-ssr/
+target/
+src-tauri/target/
+*.log
+.env
+.env.*
+!.env.example
+
