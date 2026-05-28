@@ -31,8 +31,21 @@ export function App() {
 
   const defaultEngine = engines.find((engine) => engine.isDefault);
   const engineSummary = engines.map((engine) => engine.label).join(", ");
-  const formatEngineStatus = (engine: LatexEngine) =>
-    engine.status === "installed" ? "Installed" : "Missing";
+  const formatEngineStatus = (engine: LatexEngine) => {
+    if (engine.status === "installed") {
+      return "Installed";
+    }
+
+    if (engine.statusReason === "notFound") {
+      return "Missing (not found on PATH)";
+    }
+
+    if (engine.statusReason === "failed") {
+      return "Missing (version check failed)";
+    }
+
+    return "Missing";
+  };
 
   return (
     <main className="app-shell">

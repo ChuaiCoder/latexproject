@@ -1,17 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_ENGINE_ID, getPreferredEngine } from "./latexEngine";
+import { getPreferredEngine } from "./latexEngine";
 
 describe("latex engine selection", () => {
-  it("uses MiKTeX as the default engine for compatibility", () => {
-    expect(DEFAULT_ENGINE_ID).toBe("miktex");
+  it("keeps a preferred engine when the backend reports it as available", () => {
+    expect(getPreferredEngine("tectonic", ["miktex", "tectonic"])).toBe("tectonic");
   });
 
-  it("keeps an explicit supported engine preference", () => {
-    expect(getPreferredEngine("tectonic")).toBe("tectonic");
-  });
-
-  it("falls back to the default engine for unsupported preferences", () => {
-    expect(getPreferredEngine("unknown")).toBe(DEFAULT_ENGINE_ID);
+  it("falls back to the backend default engine for unsupported preferences", () => {
+    expect(getPreferredEngine("unknown", ["tectonic", "miktex"])).toBe("tectonic");
   });
 });
-

@@ -29,12 +29,24 @@ mod tests {
             engines[0].status,
             latex::LatexEngineStatus::Installed | latex::LatexEngineStatus::Missing
         ));
+        assert!(matches!(
+            engines[0].status_reason,
+            latex::LatexEngineStatusReason::Available
+                | latex::LatexEngineStatusReason::NotFound
+                | latex::LatexEngineStatusReason::Failed
+        ));
         assert_eq!(engines[1].id, "tectonic");
         assert_eq!(engines[1].label, "Tectonic");
         assert!(!engines[1].is_default);
         assert!(matches!(
             engines[1].status,
             latex::LatexEngineStatus::Installed | latex::LatexEngineStatus::Missing
+        ));
+        assert!(matches!(
+            engines[1].status_reason,
+            latex::LatexEngineStatusReason::Available
+                | latex::LatexEngineStatusReason::NotFound
+                | latex::LatexEngineStatusReason::Failed
         ));
     }
 }
