@@ -38,6 +38,16 @@ export interface LatexDependencyState {
   managedToolchains: ManagedLatexToolchain[];
 }
 
+export interface InstallLatexToolchainRequest {
+  toolchainId: string;
+}
+
+export interface InstallLatexToolchainResult {
+  success: boolean;
+  log: string;
+  dependencyState: LatexDependencyState;
+}
+
 export function getPreferredCompiler(
   preference: string | null | undefined,
   availableCompilerIds: LatexCompilerId[],

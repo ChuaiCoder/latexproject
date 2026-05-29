@@ -1,11 +1,17 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { compileLatexDocument, loadLatexCompilers, loadLatexDependencyState } from "../backend/latexBackend";
+import {
+  compileLatexDocument,
+  installLatexToolchain,
+  loadLatexCompilers,
+  loadLatexDependencyState,
+} from "../backend/latexBackend";
 import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 
 vi.mock("../backend/latexBackend", () => ({
   compileLatexDocument: vi.fn(),
+  installLatexToolchain: vi.fn(),
   loadLatexCompilers: vi.fn(),
   loadLatexDependencyState: vi.fn(),
 }));
@@ -18,6 +24,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 describe("App", () => {
   beforeEach(() => {
     vi.mocked(compileLatexDocument).mockReset();
+    vi.mocked(installLatexToolchain).mockReset();
     vi.mocked(loadLatexCompilers).mockReset();
     vi.mocked(loadLatexDependencyState).mockReset();
     vi.mocked(convertFileSrc).mockClear();
@@ -76,6 +83,65 @@ describe("App", () => {
     expect(screen.getByText("Toolchains: C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains")).toBeInTheDocument();
     expect(screen.getByText("Packages: C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\packages")).toBeInTheDocument();
     expect(screen.getByText("Tectonic: Missing")).toBeInTheDocument();
+  });
+
+  it("installs Tectonic and refreshes compiler state", async () => {
+    vi.mocked(loadLatexCompilers)
+      .mockResolvedValueOnce([
+        {
+          id: "tectonic",
+          label: "Tectonic",
+          isDefault: false,
+          status: "missing",
+          statusReason: "notFound",
+        },
+      ])
+      .mockResolvedValueOnce([
+        { id: "tectonic", label: "Tectonic", isDefault: true, status: "installed" },
+      ]);
+    vi.mocked(loadLatexDependencyState).mockResolvedValue({
+      toolchainsDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains",
+      packagesDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\packages",
+      managedToolchains: [
+        {
+          id: "tectonic",
+          label: "Tectonic",
+          installDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains\\tectonic",
+          executablePath: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains\\tectonic\\tectonic.exe",
+          compilerIds: ["tectonic"],
+          status: "missing",
+        },
+      ],
+    });
+    vi.mocked(installLatexToolchain).mockResolvedValue({
+      success: true,
+      log: "Tectonic installed.",
+      dependencyState: {
+        toolchainsDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains",
+        packagesDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\packages",
+        managedToolchains: [
+          {
+            id: "tectonic",
+            label: "Tectonic",
+            installDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains\\tectonic",
+            executablePath: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains\\tectonic\\tectonic.exe",
+            compilerIds: ["tectonic"],
+            status: "installed",
+          },
+        ],
+      },
+    });
+
+    render(<App />);
+
+    await screen.findByText("Selected compiler: No installed compiler");
+    fireEvent.click(screen.getByRole("button", { name: "Install Tectonic" }));
+
+    await waitFor(() => {
+      expect(installLatexToolchain).toHaveBeenCalledWith({ toolchainId: "tectonic" });
+    });
+    expect(await screen.findByText("Tectonic installed.")).toBeInTheDocument();
+    expect(await screen.findByText("Selected compiler: Tectonic")).toBeInTheDocument();
   });
 
   it("shows a backend error when LaTeX compilers cannot be loaded", async () => {

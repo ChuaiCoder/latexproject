@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   CompileLatexDocumentRequest,
   CompileLatexDocumentResult,
+  InstallLatexToolchainRequest,
+  InstallLatexToolchainResult,
   LatexDependencyState,
   LatexCompiler,
 } from "../domain/latexCompiler";
@@ -31,6 +33,15 @@ export async function loadLatexDependencyState(): Promise<LatexDependencyState> 
   });
 
   return latexDependencyStateRequest;
+}
+
+export async function installLatexToolchain(
+  request: InstallLatexToolchainRequest,
+): Promise<InstallLatexToolchainResult> {
+  const result = await invoke<InstallLatexToolchainResult>("install_latex_toolchain", { request });
+  latexCompilersRequest = undefined;
+  latexDependencyStateRequest = Promise.resolve(result.dependencyState);
+  return result;
 }
 
 export function resetLatexCompilersCacheForTests(): void {

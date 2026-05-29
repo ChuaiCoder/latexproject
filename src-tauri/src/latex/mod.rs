@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -6,6 +7,8 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use zip::ZipArchive;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +78,20 @@ pub struct LatexDependencyState {
     pub managed_toolchains: Vec<ManagedLatexToolchain>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallLatexToolchainRequest {
+    pub toolchain_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallLatexToolchainResult {
+    pub success: bool,
+    pub log: String,
+    pub dependency_state: LatexDependencyState,
+}
+
 struct LatexCompilerDefinition {
     id: &'static str,
     label: &'static str,
@@ -115,6 +132,10 @@ const LATEX_COMPILER_DEFINITIONS: &[LatexCompilerDefinition] = &[
 ];
 const COMPILE_RUN_RETENTION_LIMIT: usize = 5;
 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
+const TECTONIC_VERSION: &str = "0.16.9";
+const TECTONIC_WINDOWS_X64_MSVC_URL: &str = "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.16.9/tectonic-0.16.9-x86_64-pc-windows-msvc.zip";
+const TECTONIC_WINDOWS_X64_MSVC_SHA256: &str =
+    "131a24604785a9600989a3d91225f597df52ac06f00aeffe86fd529f99ee5cdd";
 static COMPILE_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn available_compilers(app_data_dir: Option<&Path>) -> Vec<LatexCompiler> {
@@ -135,6 +156,19 @@ pub fn dependency_state(app_data_dir: &Path) -> Result<LatexDependencyState, Str
     })
 }
 
+fn dependency_state_or_empty(app_data_dir: &Path) -> LatexDependencyState {
+    dependency_state(app_data_dir).unwrap_or_else(|_| {
+        let toolchains_dir = dependency_toolchains_dir(app_data_dir);
+        let packages_dir = dependency_packages_dir(app_data_dir);
+
+        LatexDependencyState {
+            toolchains_dir: toolchains_dir.to_string_lossy().into_owned(),
+            packages_dir: packages_dir.to_string_lossy().into_owned(),
+            managed_toolchains: vec![managed_tectonic_toolchain(&toolchains_dir)],
+        }
+    })
+}
+
 pub fn compile_document(
     request: CompileLatexDocumentRequest,
     cache_root: &Path,
@@ -150,11 +184,156 @@ pub fn compile_document(
     })
 }
 
+pub fn install_toolchain(
+    request: InstallLatexToolchainRequest,
+    app_data_dir: &Path,
+) -> InstallLatexToolchainResult {
+    install_toolchain_with_installer(request, app_data_dir, install_tectonic_from_release)
+}
+
 fn with_compile_lock<T>(compile: impl FnOnce() -> T) -> T {
     let _guard = COMPILE_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     compile()
+}
+
+fn install_toolchain_with_installer(
+    request: InstallLatexToolchainRequest,
+    app_data_dir: &Path,
+    installer: impl Fn(&Path) -> Result<String, String>,
+) -> InstallLatexToolchainResult {
+    if request.toolchain_id != "tectonic" {
+        return InstallLatexToolchainResult {
+            success: false,
+            log: format!("Unsupported LaTeX toolchain: {}", request.toolchain_id),
+            dependency_state: dependency_state_or_empty(app_data_dir),
+        };
+    }
+
+    let result = installer(app_data_dir);
+
+    InstallLatexToolchainResult {
+        success: result.is_ok(),
+        log: result.unwrap_or_else(|error| error),
+        dependency_state: dependency_state_or_empty(app_data_dir),
+    }
+}
+
+fn install_tectonic_from_release(app_data_dir: &Path) -> Result<String, String> {
+    if !cfg!(windows) {
+        return Err(
+            "Managed Tectonic installation is currently supported on Windows only.".to_string(),
+        );
+    }
+
+    let archive_bytes = download_bytes(TECTONIC_WINDOWS_X64_MSVC_URL)?;
+    install_tectonic_from_zip_bytes(
+        app_data_dir,
+        archive_bytes.as_slice(),
+        TECTONIC_WINDOWS_X64_MSVC_SHA256,
+    )?;
+
+    Ok(format!("Tectonic {TECTONIC_VERSION} installed."))
+}
+
+fn install_tectonic_from_zip_bytes(
+    app_data_dir: &Path,
+    archive_bytes: &[u8],
+    expected_sha256: &str,
+) -> Result<(), String> {
+    verify_sha256(archive_bytes, expected_sha256)?;
+
+    let toolchains_dir = dependency_toolchains_dir(app_data_dir);
+    let install_dir = toolchains_dir.join("tectonic");
+    let staging_dir = toolchains_dir.join(format!(
+        ".tectonic-install-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_millis()
+    ));
+
+    if staging_dir.exists() {
+        fs::remove_dir_all(&staging_dir).map_err(|error| error.to_string())?;
+    }
+    fs::create_dir_all(&staging_dir).map_err(|error| error.to_string())?;
+
+    let install_result = extract_tectonic_executable(archive_bytes, &staging_dir)
+        .and_then(|_| replace_directory(&staging_dir, &install_dir));
+
+    if install_result.is_err() {
+        let _ = fs::remove_dir_all(&staging_dir);
+    }
+
+    install_result
+}
+
+fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -Uri $args[0] -UseBasicParsing | Select-Object -ExpandProperty Content",
+            url,
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to download Tectonic: {stderr}"));
+    }
+
+    Ok(output.stdout)
+}
+
+fn verify_sha256(bytes: &[u8], expected_sha256: &str) -> Result<(), String> {
+    let actual_sha256 = format!("{:x}", Sha256::digest(bytes));
+
+    if actual_sha256 != expected_sha256 {
+        return Err(format!(
+            "Tectonic archive checksum mismatch. Expected {expected_sha256}, got {actual_sha256}."
+        ));
+    }
+
+    Ok(())
+}
+
+fn extract_tectonic_executable(archive_bytes: &[u8], destination_dir: &Path) -> Result<(), String> {
+    let mut archive =
+        ZipArchive::new(Cursor::new(archive_bytes)).map_err(|error| error.to_string())?;
+    let executable_name = executable_name("tectonic");
+
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).map_err(|error| error.to_string())?;
+        let Some(file_name) = Path::new(file.name()).file_name() else {
+            continue;
+        };
+
+        if file_name == executable_name.as_str() {
+            let mut executable_bytes = Vec::new();
+            file.read_to_end(&mut executable_bytes)
+                .map_err(|error| error.to_string())?;
+            fs::write(destination_dir.join(executable_name), executable_bytes)
+                .map_err(|error| error.to_string())?;
+            return Ok(());
+        }
+    }
+
+    Err("Tectonic archive did not contain the expected executable.".to_string())
+}
+
+fn replace_directory(staging_dir: &Path, install_dir: &Path) -> Result<(), String> {
+    if install_dir.exists() {
+        fs::remove_dir_all(install_dir).map_err(|error| error.to_string())?;
+    }
+
+    fs::rename(staging_dir, install_dir).map_err(|error| error.to_string())
 }
 
 fn compile_document_for_definitions(
@@ -502,18 +681,21 @@ fn executable_name(name: &str) -> String {
 mod tests {
     use super::{
         compile_document_with, compiler_command, dependency_state, detect_compiler_with_timeout,
-        detect_compilers_with, executable_name, prepare_working_dir, CompileLatexDocumentRequest,
-        EngineDetection, LatexCompilerDefinition, LatexCompilerStatus, LatexCompilerStatusReason,
+        detect_compilers_with, executable_name, extract_tectonic_executable,
+        install_tectonic_from_zip_bytes, install_toolchain_with_installer, prepare_working_dir,
+        verify_sha256, CompileLatexDocumentRequest, EngineDetection, InstallLatexToolchainRequest,
+        LatexCompilerDefinition, LatexCompilerStatus, LatexCompilerStatusReason,
         ManagedLatexToolchainStatus,
     };
+    use sha2::Digest;
     use std::fs;
     use std::path::Path;
     use std::sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     };
     use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn marks_compiler_detection_as_missing_when_version_check_times_out() {
@@ -661,6 +843,106 @@ mod tests {
             state.managed_toolchains[0].status,
             ManagedLatexToolchainStatus::Missing
         );
+
+        let _ = fs::remove_dir_all(app_data_dir);
+    }
+
+    #[test]
+    fn install_toolchain_installs_tectonic_into_managed_directory() {
+        let app_data_dir = unique_temp_dir("install-tectonic");
+
+        let result = install_toolchain_with_installer(
+            InstallLatexToolchainRequest {
+                toolchain_id: "tectonic".to_string(),
+            },
+            &app_data_dir,
+            |app_data_dir| {
+                let executable = app_data_dir
+                    .join("dependencies")
+                    .join("toolchains")
+                    .join("tectonic")
+                    .join(executable_name("tectonic"));
+                fs::create_dir_all(
+                    executable
+                        .parent()
+                        .expect("managed executable should have parent"),
+                )
+                .expect("managed executable dir should be created");
+                fs::write(&executable, "").expect("managed executable should be written");
+                Ok("Tectonic installed.".to_string())
+            },
+        );
+
+        assert!(result.success);
+        assert_eq!(result.log, "Tectonic installed.");
+        assert_eq!(
+            result.dependency_state.managed_toolchains[0].status,
+            ManagedLatexToolchainStatus::Installed
+        );
+
+        let _ = fs::remove_dir_all(app_data_dir);
+    }
+
+    #[test]
+    fn install_toolchain_rejects_unsupported_toolchain_ids() {
+        let app_data_dir = unique_temp_dir("install-unsupported");
+
+        let result = install_toolchain_with_installer(
+            InstallLatexToolchainRequest {
+                toolchain_id: "unknown".to_string(),
+            },
+            &app_data_dir,
+            |_| Ok("should not run".to_string()),
+        );
+
+        assert!(!result.success);
+        assert!(result.log.contains("Unsupported LaTeX toolchain"));
+        assert_eq!(
+            result.dependency_state.managed_toolchains[0].status,
+            ManagedLatexToolchainStatus::Missing
+        );
+
+        let _ = fs::remove_dir_all(app_data_dir);
+    }
+
+    #[test]
+    fn verify_sha256_rejects_tampered_archives() {
+        let result = verify_sha256(b"tampered", "000000");
+
+        assert!(result
+            .expect_err("checksum should fail")
+            .contains("checksum mismatch"));
+    }
+
+    #[test]
+    fn extract_tectonic_executable_rejects_archives_without_executable() {
+        let temp_dir = unique_temp_dir("missing-tectonic-in-zip");
+        let archive_bytes = zip_archive_with_file("README.txt", b"not tectonic");
+
+        let result = extract_tectonic_executable(&archive_bytes, &temp_dir);
+
+        assert!(result
+            .expect_err("archive should be rejected")
+            .contains("expected executable"));
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn install_tectonic_from_zip_bytes_extracts_executable_to_managed_directory() {
+        let app_data_dir = unique_temp_dir("install-tectonic-from-zip");
+        let archive_bytes = zip_archive_with_file(executable_name("tectonic").as_str(), b"exe");
+        let expected_hash = sha256_hex(&archive_bytes);
+
+        install_tectonic_from_zip_bytes(&app_data_dir, &archive_bytes, expected_hash.as_str())
+            .expect("archive should install");
+
+        assert!(app_data_dir
+            .join("dependencies")
+            .join("toolchains")
+            .join("tectonic")
+            .join(executable_name("tectonic"))
+            .exists());
 
         let _ = fs::remove_dir_all(app_data_dir);
     }
@@ -882,10 +1164,38 @@ mod tests {
     }
 
     fn unique_temp_dir(name: &str) -> std::path::PathBuf {
+        static TEMP_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let counter = TEMP_DIR_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after Unix epoch")
+            .as_millis();
+
         std::env::temp_dir().join(format!(
-            "latex-workbench-test-{name}-{}",
-            std::process::id()
+            "latex-workbench-test-{name}-{}-{timestamp}-{counter}",
+            std::process::id(),
         ))
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        format!("{:x}", sha2::Sha256::digest(bytes))
+    }
+
+    fn zip_archive_with_file(file_name: &str, content: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(cursor);
+        let options = zip::write::SimpleFileOptions::default();
+
+        zip.start_file(file_name, options)
+            .expect("zip file entry should start");
+        zip.write_all(content)
+            .expect("zip file content should be written");
+
+        zip.finish()
+            .expect("zip archive should finish")
+            .into_inner()
     }
 
     #[cfg(windows)]

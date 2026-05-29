@@ -179,9 +179,34 @@ textarea {
   font-weight: 650;
 }
 
+.secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: fit-content;
+  border: 1px solid #cfd9de;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #293940;
+  cursor: pointer;
+  padding: 7px 10px;
+  font-weight: 650;
+}
+
 .compile-button:focus-visible {
   outline: 2px solid #1f9d93;
   outline-offset: 2px;
+}
+
+.secondary-button:focus-visible {
+  outline: 2px solid #1f9d93;
+  outline-offset: 2px;
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
 }
 
 .muted {

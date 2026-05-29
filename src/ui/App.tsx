@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
 import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
-import { Play } from "lucide-react";
-import { compileLatexDocument, loadLatexCompilers, loadLatexDependencyState } from "../backend/latexBackend";
+import { Download, Play } from "lucide-react";
+import {
+  compileLatexDocument,
+  installLatexToolchain,
+  loadLatexCompilers,
+  loadLatexDependencyState,
+} from "../backend/latexBackend";
 import type { CompileLatexDocumentResult, LatexCompiler, LatexDependencyState } from "../domain/latexCompiler";
 
 const STARTER_DOCUMENT = "\\documentclass{article}\n\\begin{document}\nHello from LaTeX Workbench.\n\\end{document}\n";
@@ -13,6 +18,8 @@ export function App() {
   const [dependencyError, setDependencyError] = useState(false);
   const [compileResult, setCompileResult] = useState<CompileLatexDocumentResult | undefined>();
   const [isCompiling, setIsCompiling] = useState(false);
+  const [isInstallingToolchain, setIsInstallingToolchain] = useState(false);
+  const [installLog, setInstallLog] = useState<string | undefined>();
   const [source, setSource] = useState(STARTER_DOCUMENT);
   const isDesktopClient = isTauri();
 
@@ -59,6 +66,9 @@ export function App() {
   const selectedCompiler =
     compilers.find((compiler) => compiler.isDefault && compiler.status === "installed") ??
     compilers.find((compiler) => compiler.status === "installed");
+  const installableTectonic = dependencyState?.managedToolchains.find(
+    (toolchain) => toolchain.id === "tectonic" && toolchain.status === "missing",
+  );
   const previewSource =
     compileResult?.success && compileResult.pdfPath ? convertFileSrc(compileResult.pdfPath) : undefined;
   const compilerSummary = compilers.map((compiler) => compiler.label).join(", ");
@@ -103,6 +113,37 @@ export function App() {
       });
     } finally {
       setIsCompiling(false);
+    }
+  };
+
+  const refreshLatexState = async () => {
+    const [loadedCompilers, loadedDependencyState] = await Promise.all([
+      loadLatexCompilers(),
+      loadLatexDependencyState(),
+    ]);
+    setCompilers(loadedCompilers);
+    setCompilerError(false);
+    setDependencyState(loadedDependencyState);
+    setDependencyError(false);
+  };
+
+  const handleInstallTectonic = async () => {
+    if (!isDesktopClient || isInstallingToolchain) {
+      return;
+    }
+
+    setIsInstallingToolchain(true);
+    setInstallLog(undefined);
+
+    try {
+      const result = await installLatexToolchain({ toolchainId: "tectonic" });
+      setDependencyState(result.dependencyState);
+      setInstallLog(result.log);
+      await refreshLatexState();
+    } catch (error) {
+      setInstallLog(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsInstallingToolchain(false);
     }
   };
 
@@ -179,11 +220,27 @@ export function App() {
                         ))}
                       </ul>
                     ) : null}
+                    {installableTectonic ? (
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        disabled={isInstallingToolchain}
+                        onClick={handleInstallTectonic}
+                      >
+                        <Download size={16} aria-hidden="true" />
+                        {isInstallingToolchain ? "Installing Tectonic" : "Install Tectonic"}
+                      </button>
+                    ) : null}
                   </section>
                 ) : null}
                 {dependencyError ? <p role="status">Unable to load managed LaTeX dependency state.</p> : null}
               </>
             )}
+            {installLog ? (
+              <section className="compile-log" aria-label="Install log" role="status">
+                <pre>{installLog}</pre>
+              </section>
+            ) : null}
             {compileResult?.success && compileResult.pdfPath ? (
               <p role="status">Compile succeeded: {compileResult.pdfPath}</p>
             ) : null}

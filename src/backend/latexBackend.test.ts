@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   compileLatexDocument,
+  installLatexToolchain,
   loadLatexDependencyState,
   loadLatexCompilers,
   resetLatexCompilersCacheForTests,
@@ -121,5 +122,34 @@ describe("latex backend client", () => {
 
     expect(invoke).toHaveBeenCalledWith("latex_dependency_state");
     expect(result).toEqual(dependencyState);
+  });
+
+  it("installs a managed LaTeX toolchain through the Tauri command boundary", async () => {
+    const installResult = {
+      success: true,
+      log: "Tectonic installed.",
+      dependencyState: {
+        toolchainsDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains",
+        packagesDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\packages",
+        managedToolchains: [
+          {
+            id: "tectonic",
+            label: "Tectonic",
+            installDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains\\tectonic",
+            executablePath: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains\\tectonic\\tectonic.exe",
+            compilerIds: ["tectonic"],
+            status: "installed",
+          },
+        ],
+      },
+    };
+    vi.mocked(invoke).mockResolvedValue(installResult);
+
+    const result = await installLatexToolchain({ toolchainId: "tectonic" });
+
+    expect(invoke).toHaveBeenCalledWith("install_latex_toolchain", {
+      request: { toolchainId: "tectonic" },
+    });
+    expect(result).toEqual(installResult);
   });
 });

@@ -39,13 +39,25 @@ fn latex_dependency_state(app: tauri::AppHandle) -> Result<latex::LatexDependenc
         .and_then(|app_data_dir| latex::dependency_state(&app_data_dir))
 }
 
+#[tauri::command]
+fn install_latex_toolchain(
+    app: tauri::AppHandle,
+    request: latex::InstallLatexToolchainRequest,
+) -> Result<latex::InstallLatexToolchainResult, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())
+        .map(|app_data_dir| latex::install_toolchain(request, &app_data_dir))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             available_latex_compilers,
             compile_latex_document,
-            latex_dependency_state
+            latex_dependency_state,
+            install_latex_toolchain
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
