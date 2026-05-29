@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -51,7 +51,6 @@ pub struct CompileLatexDocumentResult {
 struct LatexCompilerDefinition {
     id: &'static str,
     label: &'static str,
-    is_default: bool,
     command: &'static str,
     args: &'static [&'static str],
 }
@@ -60,28 +59,24 @@ const LATEX_COMPILER_DEFINITIONS: &[LatexCompilerDefinition] = &[
     LatexCompilerDefinition {
         id: "pdflatex",
         label: "pdfLaTeX",
-        is_default: true,
         command: "pdflatex",
         args: &["-interaction=nonstopmode", "-halt-on-error", "main.tex"],
     },
     LatexCompilerDefinition {
         id: "xelatex",
         label: "XeLaTeX",
-        is_default: false,
         command: "xelatex",
         args: &["-interaction=nonstopmode", "-halt-on-error", "main.tex"],
     },
     LatexCompilerDefinition {
         id: "lualatex",
         label: "LuaLaTeX",
-        is_default: false,
         command: "lualatex",
         args: &["-interaction=nonstopmode", "-halt-on-error", "main.tex"],
     },
     LatexCompilerDefinition {
         id: "tectonic",
         label: "Tectonic",
-        is_default: false,
         command: "tectonic",
         args: &["main.tex"],
     },
@@ -93,21 +88,44 @@ pub fn available_compilers() -> Vec<LatexCompiler> {
 
 pub fn compile_document(
     request: CompileLatexDocumentRequest,
-) -> Result<CompileLatexDocumentResult, String> {
-    let compiler = LATEX_COMPILER_DEFINITIONS
+    cache_root: &Path,
+) -> CompileLatexDocumentResult {
+    compile_document_for_definitions(request, cache_root, LATEX_COMPILER_DEFINITIONS)
+}
+
+fn compile_document_for_definitions(
+    request: CompileLatexDocumentRequest,
+    cache_root: &Path,
+    definitions: &[LatexCompilerDefinition],
+) -> CompileLatexDocumentResult {
+    let compiler = match definitions
         .iter()
         .find(|compiler| compiler.id == request.compiler_id)
-        .ok_or_else(|| format!("Unsupported LaTeX compiler: {}", request.compiler_id))?;
-    let working_dir = unique_working_dir()?;
+    {
+        Some(compiler) => compiler,
+        None => {
+            return failed_compile_result(format!(
+                "Unsupported LaTeX compiler: {}",
+                request.compiler_id
+            ));
+        }
+    };
+    let working_dir = match prepare_working_dir(cache_root) {
+        Ok(working_dir) => working_dir,
+        Err(error) => return failed_compile_result(error),
+    };
 
-    compile_document_with(
+    match compile_document_with(
         request.compiler_id.as_str(),
         request.source.as_str(),
         &working_dir,
         compiler.command,
         compiler.args,
         Duration::from_secs(20),
-    )
+    ) {
+        Ok(result) => result,
+        Err(error) => failed_compile_result(error),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,7 +152,7 @@ fn detect_compilers_with(
                     LatexCompiler {
                         id: definition.id,
                         label: definition.label,
-                        is_default: definition.is_default,
+                        is_default: false,
                         status: detection.status,
                         status_reason: detection.reason,
                     }
@@ -142,10 +160,19 @@ fn detect_compilers_with(
             })
             .collect::<Vec<_>>();
 
-        detection_handles
+        let mut compilers = detection_handles
             .into_iter()
             .map(|handle| handle.join().expect("LaTeX compiler detection panicked"))
-            .collect()
+            .collect::<Vec<_>>();
+
+        if let Some(default_compiler) = compilers
+            .iter_mut()
+            .find(|compiler| compiler.status == LatexCompilerStatus::Installed)
+        {
+            default_compiler.is_default = true;
+        }
+
+        compilers
     })
 }
 
@@ -288,23 +315,54 @@ fn format_process_log(stdout: &[u8], stderr: &[u8]) -> String {
     log
 }
 
-fn unique_working_dir() -> Result<std::path::PathBuf, String> {
+fn prepare_working_dir(cache_root: &Path) -> Result<PathBuf, String> {
+    fs::create_dir_all(cache_root).map_err(|error| error.to_string())?;
+    prune_compile_runs(cache_root)?;
+    let working_dir = unique_working_dir_in(cache_root)?;
+    fs::create_dir_all(&working_dir).map_err(|error| error.to_string())?;
+    Ok(working_dir)
+}
+
+fn prune_compile_runs(cache_root: &Path) -> Result<(), String> {
+    for entry in fs::read_dir(cache_root).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+        let is_compile_run = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with("run-"));
+
+        if path.is_dir() && is_compile_run {
+            fs::remove_dir_all(&path).map_err(|error| error.to_string())?;
+        }
+    }
+
+    Ok(())
+}
+
+fn unique_working_dir_in(cache_root: &Path) -> Result<PathBuf, String> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| error.to_string())?
         .as_millis();
 
-    Ok(std::env::temp_dir().join(format!(
-        "latex-workbench-{}-{timestamp}",
-        std::process::id()
-    )))
+    Ok(cache_root.join(format!("run-{}-{timestamp}", std::process::id())))
+}
+
+fn failed_compile_result(log: String) -> CompileLatexDocumentResult {
+    CompileLatexDocumentResult {
+        success: false,
+        log,
+        pdf_path: None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         compile_document_with, detect_compiler_with_timeout, detect_compilers_with,
-        EngineDetection, LatexCompilerDefinition, LatexCompilerStatus, LatexCompilerStatusReason,
+        prepare_working_dir, CompileLatexDocumentRequest, EngineDetection, LatexCompilerDefinition,
+        LatexCompilerStatus, LatexCompilerStatusReason,
     };
     use std::fs;
     use std::path::Path;
@@ -331,14 +389,12 @@ mod tests {
             LatexCompilerDefinition {
                 id: "slow-a",
                 label: "Slow A",
-                is_default: true,
                 command: "slow-a",
                 args: &["main.tex"],
             },
             LatexCompilerDefinition {
                 id: "slow-b",
                 label: "Slow B",
-                is_default: false,
                 command: "slow-b",
                 args: &["main.tex"],
             },
@@ -358,6 +414,41 @@ mod tests {
     }
 
     #[test]
+    fn marks_first_installed_compiler_as_default() {
+        static DEFINITIONS: &[LatexCompilerDefinition] = &[
+            LatexCompilerDefinition {
+                id: "missing-default",
+                label: "Missing Default",
+                command: "missing-default",
+                args: &["main.tex"],
+            },
+            LatexCompilerDefinition {
+                id: "installed-fallback",
+                label: "Installed Fallback",
+                command: "installed-fallback",
+                args: &["main.tex"],
+            },
+        ];
+
+        let compilers = detect_compilers_with(DEFINITIONS, |command| {
+            if command == "installed-fallback" {
+                EngineDetection {
+                    status: LatexCompilerStatus::Installed,
+                    reason: LatexCompilerStatusReason::Available,
+                }
+            } else {
+                EngineDetection {
+                    status: LatexCompilerStatus::Missing,
+                    reason: LatexCompilerStatusReason::NotFound,
+                }
+            }
+        });
+
+        assert!(!compilers[0].is_default);
+        assert!(compilers[1].is_default);
+    }
+
+    #[test]
     fn exposes_real_latex_compilers_not_distributions() {
         let compilers = super::available_compilers();
 
@@ -369,7 +460,6 @@ mod tests {
             vec!["pdflatex", "xelatex", "lualatex", "tectonic"]
         );
         assert_eq!(compilers[0].label, "pdfLaTeX");
-        assert!(compilers[0].is_default);
     }
 
     #[test]
@@ -431,6 +521,49 @@ mod tests {
         assert!(result.log.contains("Undefined control sequence"));
 
         let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
+    fn returns_structured_result_when_compiler_spawn_fails() {
+        static DEFINITIONS: &[LatexCompilerDefinition] = &[LatexCompilerDefinition {
+            id: "missing-compiler",
+            label: "Missing Compiler",
+            command: "latex-workbench-missing-compiler-for-test",
+            args: &["main.tex"],
+        }];
+        let cache_root = unique_temp_dir("spawn-failure");
+
+        let result = super::compile_document_for_definitions(
+            CompileLatexDocumentRequest {
+                compiler_id: "missing-compiler".to_string(),
+                source: "\\documentclass{article}\\begin{document}Hi\\end{document}".to_string(),
+            },
+            &cache_root,
+            DEFINITIONS,
+        );
+
+        assert!(!result.success);
+        assert!(result.pdf_path.is_none());
+        assert!(!result.log.is_empty());
+
+        let _ = fs::remove_dir_all(cache_root);
+    }
+
+    #[test]
+    fn creates_compile_runs_under_cache_root_and_prunes_old_runs() {
+        let cache_root = unique_temp_dir("compile-cache");
+        let old_run = cache_root.join("run-old");
+        let unrelated_dir = cache_root.join("other");
+        fs::create_dir_all(&old_run).expect("old run should be created");
+        fs::create_dir_all(&unrelated_dir).expect("unrelated dir should be created");
+
+        let working_dir = prepare_working_dir(&cache_root).expect("working dir should be prepared");
+
+        assert!(working_dir.starts_with(&cache_root));
+        assert!(!old_run.exists());
+        assert!(unrelated_dir.exists());
+
+        let _ = fs::remove_dir_all(cache_root);
     }
 
     fn unique_temp_dir(name: &str) -> std::path::PathBuf {

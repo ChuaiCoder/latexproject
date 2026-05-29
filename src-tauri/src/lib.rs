@@ -1,5 +1,7 @@
 mod latex;
 
+use tauri::Manager;
+
 #[tauri::command]
 fn available_latex_compilers() -> Vec<latex::LatexCompiler> {
     latex::available_compilers()
@@ -7,9 +9,17 @@ fn available_latex_compilers() -> Vec<latex::LatexCompiler> {
 
 #[tauri::command]
 fn compile_latex_document(
+    app: tauri::AppHandle,
     request: latex::CompileLatexDocumentRequest,
-) -> Result<latex::CompileLatexDocumentResult, String> {
-    latex::compile_document(request)
+) -> latex::CompileLatexDocumentResult {
+    match app.path().app_cache_dir() {
+        Ok(cache_dir) => latex::compile_document(request, &cache_dir.join("compile-runs")),
+        Err(error) => latex::CompileLatexDocumentResult {
+            success: false,
+            log: error.to_string(),
+            pdf_path: None,
+        },
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

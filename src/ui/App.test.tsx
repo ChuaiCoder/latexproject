@@ -30,7 +30,7 @@ describe("App", () => {
 
     expect(screen.getByLabelText("LaTeX Workbench")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /compile/i })).toBeInTheDocument();
-    expect(await screen.findByText("Default compiler: pdfLaTeX")).toBeInTheDocument();
+    expect(await screen.findByText("Selected compiler: pdfLaTeX")).toBeInTheDocument();
     expect(screen.getByText("Available compilers: pdfLaTeX, XeLaTeX")).toBeInTheDocument();
     expect(screen.getByText("pdfLaTeX: Installed")).toBeInTheDocument();
     expect(screen.getByText("XeLaTeX: Missing (not found on PATH)")).toBeInTheDocument();
@@ -58,9 +58,41 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByText("pdfLaTeX: Missing (version check timed out)")).toBeInTheDocument();
+    expect(screen.getByText("Selected compiler: No installed compiler")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /compile/i })).toBeDisabled();
   });
 
-  it("compiles the starter document with the default compiler", async () => {
+  it("falls back to the first installed compiler when the backend default is missing", async () => {
+    vi.mocked(loadLatexCompilers).mockResolvedValue([
+      {
+        id: "pdflatex",
+        label: "pdfLaTeX",
+        isDefault: true,
+        status: "missing",
+        statusReason: "notFound",
+      },
+      { id: "xelatex", label: "XeLaTeX", isDefault: false, status: "installed" },
+    ]);
+    vi.mocked(compileLatexDocument).mockResolvedValue({
+      success: true,
+      log: "compiled with xelatex",
+      pdfPath: "C:\\tmp\\main.pdf",
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText("Selected compiler: XeLaTeX")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /compile/i }));
+
+    await waitFor(() => {
+      expect(compileLatexDocument).toHaveBeenCalledWith({
+        compilerId: "xelatex",
+        source: expect.stringContaining("\\documentclass{article}"),
+      });
+    });
+  });
+
+  it("compiles the starter document with the selected compiler", async () => {
     vi.mocked(loadLatexCompilers).mockResolvedValue([
       { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" },
     ]);
@@ -72,7 +104,7 @@ describe("App", () => {
 
     render(<App />);
 
-    await screen.findByText("Default compiler: pdfLaTeX");
+    await screen.findByText("Selected compiler: pdfLaTeX");
     fireEvent.click(screen.getByRole("button", { name: /compile/i }));
 
     await waitFor(() => {
@@ -96,7 +128,7 @@ describe("App", () => {
 
     render(<App />);
 
-    await screen.findByText("Default compiler: pdfLaTeX");
+    await screen.findByText("Selected compiler: pdfLaTeX");
     fireEvent.change(screen.getByLabelText("main.tex source"), {
       target: {
         value: "\\documentclass{article}\n\\begin{document}\nEdited source\n\\end{document}\n",
@@ -124,7 +156,7 @@ describe("App", () => {
 
     render(<App />);
 
-    await screen.findByText("Default compiler: pdfLaTeX");
+    await screen.findByText("Selected compiler: pdfLaTeX");
     fireEvent.click(screen.getByRole("button", { name: /compile/i }));
 
     const logPanel = await screen.findByRole("region", { name: "Compile log" });
@@ -142,10 +174,25 @@ describe("App", () => {
 
     render(<App />);
 
-    await screen.findByText("Default compiler: pdfLaTeX");
+    await screen.findByText("Selected compiler: pdfLaTeX");
     fireEvent.click(screen.getByRole("button", { name: /compile/i }));
 
     expect(await screen.findByText("Compile failed.")).toBeInTheDocument();
     expect(screen.getByText("! Undefined control sequence.")).toBeInTheDocument();
+  });
+
+  it("shows compile request errors in the compile log", async () => {
+    vi.mocked(loadLatexCompilers).mockResolvedValue([
+      { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" },
+    ]);
+    vi.mocked(compileLatexDocument).mockRejectedValue(new Error("spawn pdflatex ENOENT"));
+
+    render(<App />);
+
+    await screen.findByText("Selected compiler: pdfLaTeX");
+    fireEvent.click(screen.getByRole("button", { name: /compile/i }));
+
+    expect(await screen.findByText("Compile failed.")).toBeInTheDocument();
+    expect(screen.getByText("spawn pdflatex ENOENT")).toBeInTheDocument();
   });
 });

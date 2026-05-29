@@ -9,7 +9,6 @@ export function App() {
   const [compilers, setCompilers] = useState<LatexCompiler[]>([]);
   const [compilerError, setCompilerError] = useState(false);
   const [compileResult, setCompileResult] = useState<CompileLatexDocumentResult | undefined>();
-  const [compileError, setCompileError] = useState(false);
   const [isCompiling, setIsCompiling] = useState(false);
   const [source, setSource] = useState(STARTER_DOCUMENT);
 
@@ -35,7 +34,9 @@ export function App() {
     };
   }, []);
 
-  const defaultCompiler = compilers.find((compiler) => compiler.isDefault);
+  const selectedCompiler =
+    compilers.find((compiler) => compiler.isDefault && compiler.status === "installed") ??
+    compilers.find((compiler) => compiler.status === "installed");
   const compilerSummary = compilers.map((compiler) => compiler.label).join(", ");
   const formatCompilerStatus = (compiler: LatexCompiler) => {
     if (compiler.status === "installed") {
@@ -58,22 +59,24 @@ export function App() {
   };
 
   const handleCompile = async () => {
-    if (!defaultCompiler || isCompiling) {
+    if (!selectedCompiler || isCompiling) {
       return;
     }
 
     setIsCompiling(true);
-    setCompileError(false);
     setCompileResult(undefined);
 
     try {
       const result = await compileLatexDocument({
-        compilerId: defaultCompiler.id,
+        compilerId: selectedCompiler.id,
         source,
       });
       setCompileResult(result);
-    } catch {
-      setCompileError(true);
+    } catch (error) {
+      setCompileResult({
+        success: false,
+        log: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       setIsCompiling(false);
     }
@@ -89,7 +92,7 @@ export function App() {
         <button
           className="compile-button"
           type="button"
-          disabled={!defaultCompiler || isCompiling}
+          disabled={!selectedCompiler || isCompiling}
           onClick={handleCompile}
         >
           <Play size={16} aria-hidden="true" /> {isCompiling ? "Compiling" : "Compile"}
@@ -122,7 +125,7 @@ export function App() {
               <p role="status">Unable to load LaTeX compilers.</p>
             ) : (
               <>
-                <p>Default compiler: {defaultCompiler?.label ?? "Loading..."}</p>
+                <p>Selected compiler: {selectedCompiler?.label ?? "No installed compiler"}</p>
                 {compilerSummary ? <p>Available compilers: {compilerSummary}</p> : null}
                 {compilers.length > 0 ? (
                   <ul className="compiler-status-list" aria-label="LaTeX compiler status">
@@ -135,7 +138,6 @@ export function App() {
                 ) : null}
               </>
             )}
-            {compileError ? <p role="status">Compile request failed.</p> : null}
             {compileResult?.success && compileResult.pdfPath ? (
               <p role="status">Compile succeeded: {compileResult.pdfPath}</p>
             ) : null}
