@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { Play } from "lucide-react";
 import { compileLatexDocument, loadLatexCompilers } from "../backend/latexBackend";
 import type { CompileLatexDocumentResult, LatexCompiler } from "../domain/latexCompiler";
@@ -37,6 +38,8 @@ export function App() {
   const selectedCompiler =
     compilers.find((compiler) => compiler.isDefault && compiler.status === "installed") ??
     compilers.find((compiler) => compiler.status === "installed");
+  const previewSource =
+    compileResult?.success && compileResult.pdfPath ? convertFileSrc(compileResult.pdfPath) : undefined;
   const compilerSummary = compilers.map((compiler) => compiler.label).join(", ");
   const formatCompilerStatus = (compiler: LatexCompiler) => {
     if (compiler.status === "installed") {
@@ -157,9 +160,17 @@ export function App() {
 
         <section className="panel" aria-label="PDF preview">
           <div className="panel-header">Preview</div>
-          <div className="preview-placeholder">
-            <p className="muted">PDF preview adapter pending.</p>
-          </div>
+          {previewSource ? (
+            <iframe
+              className="pdf-preview"
+              src={previewSource}
+              title="Compiled PDF preview"
+            />
+          ) : (
+            <div className="preview-placeholder">
+              <p className="muted">No PDF preview available.</p>
+            </div>
+          )}
         </section>
       </section>
     </main>

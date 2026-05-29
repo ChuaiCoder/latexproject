@@ -2,16 +2,22 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { compileLatexDocument, loadLatexCompilers } from "../backend/latexBackend";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 vi.mock("../backend/latexBackend", () => ({
   compileLatexDocument: vi.fn(),
   loadLatexCompilers: vi.fn(),
 }));
 
+vi.mock("@tauri-apps/api/core", () => ({
+  convertFileSrc: vi.fn((path: string) => `asset://${path}`),
+}));
+
 describe("App", () => {
   beforeEach(() => {
     vi.mocked(compileLatexDocument).mockReset();
     vi.mocked(loadLatexCompilers).mockReset();
+    vi.mocked(convertFileSrc).mockClear();
   });
 
   it("shows the workbench shell with the default LaTeX compiler from the backend", async () => {
@@ -194,5 +200,53 @@ describe("App", () => {
 
     expect(await screen.findByText("Compile failed.")).toBeInTheDocument();
     expect(screen.getByText("spawn pdflatex ENOENT")).toBeInTheDocument();
+  });
+
+  it("previews the compiled PDF after a successful compile", async () => {
+    vi.mocked(loadLatexCompilers).mockResolvedValue([
+      { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" },
+    ]);
+    vi.mocked(compileLatexDocument).mockResolvedValue({
+      success: true,
+      log: "compiled",
+      pdfPath: "C:\\tmp\\main.pdf",
+    });
+
+    render(<App />);
+
+    await screen.findByText("Selected compiler: pdfLaTeX");
+    fireEvent.click(screen.getByRole("button", { name: /compile/i }));
+
+    const preview = await screen.findByTitle("Compiled PDF preview");
+    expect(convertFileSrc).toHaveBeenCalledWith("C:\\tmp\\main.pdf");
+    expect(preview).toHaveAttribute("src", "asset://C:\\tmp\\main.pdf");
+  });
+
+  it("clears the previous PDF preview when the next compile fails", async () => {
+    vi.mocked(loadLatexCompilers).mockResolvedValue([
+      { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" },
+    ]);
+    vi.mocked(compileLatexDocument)
+      .mockResolvedValueOnce({
+        success: true,
+        log: "compiled",
+        pdfPath: "C:\\tmp\\main.pdf",
+      })
+      .mockResolvedValueOnce({
+        success: false,
+        log: "! Undefined control sequence.",
+      });
+
+    render(<App />);
+
+    await screen.findByText("Selected compiler: pdfLaTeX");
+    fireEvent.click(screen.getByRole("button", { name: /compile/i }));
+    expect(await screen.findByTitle("Compiled PDF preview")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /compile/i }));
+
+    await screen.findByText("Compile failed.");
+    expect(screen.queryByTitle("Compiled PDF preview")).not.toBeInTheDocument();
+    expect(screen.getByText("No PDF preview available.")).toBeInTheDocument();
   });
 });

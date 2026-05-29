@@ -148,6 +148,14 @@ textarea {
   white-space: pre-wrap;
 }
 
+.pdf-preview {
+  width: 100%;
+  height: calc(100vh - 88px);
+  min-height: 360px;
+  border: 0;
+  background: #eef2f3;
+}
+
 .file-item {
   border-radius: 6px;
   padding: 8px 10px;
