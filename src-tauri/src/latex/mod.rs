@@ -150,7 +150,7 @@ fn detect_compilers_with(
 }
 
 fn detect_compiler(command: &str) -> EngineDetection {
-    detect_compiler_with_timeout(command, &["--version"], Duration::from_millis(800))
+    detect_compiler_with_timeout(command, &["--version"], Duration::from_secs(3))
 }
 
 fn detect_compiler_with_timeout(
@@ -307,6 +307,7 @@ mod tests {
         EngineDetection, LatexCompilerDefinition, LatexCompilerStatus, LatexCompilerStatusReason,
     };
     use std::fs;
+    use std::path::Path;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -372,6 +373,20 @@ mod tests {
     }
 
     #[test]
+    fn default_detection_allows_slow_successful_version_checks() {
+        let temp_dir = unique_temp_dir("slow-version-success");
+        let command = slow_successful_version_probe(&temp_dir);
+
+        let detection =
+            super::detect_compiler(command.to_str().expect("command path should be UTF-8"));
+
+        assert_eq!(detection.status, LatexCompilerStatus::Installed);
+        assert_eq!(detection.reason, LatexCompilerStatusReason::Available);
+
+        let _ = fs::remove_dir_all(temp_dir);
+    }
+
+    #[test]
     fn compiles_document_and_returns_pdf_path_when_compiler_succeeds() {
         let temp_dir = unique_temp_dir("success");
 
@@ -423,6 +438,35 @@ mod tests {
             "latex-workbench-test-{name}-{}",
             std::process::id()
         ))
+    }
+
+    #[cfg(windows)]
+    fn slow_successful_version_probe(temp_dir: &Path) -> std::path::PathBuf {
+        let command = temp_dir.join("slow-version.cmd");
+        fs::create_dir_all(temp_dir).expect("temp dir should be created");
+        fs::write(
+            &command,
+            "@echo off\r\npowershell -NoProfile -Command \"Start-Sleep -Milliseconds 1000\"\r\nexit /b 0\r\n",
+        )
+        .expect("slow version probe should be written");
+        command
+    }
+
+    #[cfg(not(windows))]
+    fn slow_successful_version_probe(temp_dir: &Path) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let command = temp_dir.join("slow-version");
+        fs::create_dir_all(temp_dir).expect("temp dir should be created");
+        fs::write(&command, "#!/bin/sh\nsleep 1\nexit 0\n")
+            .expect("slow version probe should be written");
+        let mut permissions = fs::metadata(&command)
+            .expect("slow version probe should exist")
+            .permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&command, permissions)
+            .expect("slow version probe should be executable");
+        command
     }
 
     #[cfg(windows)]

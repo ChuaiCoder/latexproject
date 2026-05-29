@@ -11,6 +11,7 @@ export function App() {
   const [compileResult, setCompileResult] = useState<CompileLatexDocumentResult | undefined>();
   const [compileError, setCompileError] = useState(false);
   const [isCompiling, setIsCompiling] = useState(false);
+  const [source, setSource] = useState(STARTER_DOCUMENT);
 
   useEffect(() => {
     let isMounted = true;
@@ -68,7 +69,7 @@ export function App() {
     try {
       const result = await compileLatexDocument({
         compilerId: defaultCompiler.id,
-        source: STARTER_DOCUMENT,
+        source,
       });
       setCompileResult(result);
     } catch {
@@ -106,8 +107,17 @@ export function App() {
 
         <section className="panel" aria-label="Editor">
           <div className="panel-header">Editor</div>
-          <div className="editor-placeholder">
-            <p className="muted">Editor adapter pending.</p>
+          <div className="editor-surface">
+            <label className="visually-hidden" htmlFor="latex-source">
+              main.tex source
+            </label>
+            <textarea
+              id="latex-source"
+              className="source-editor"
+              spellCheck={false}
+              value={source}
+              onChange={(event) => setSource(event.target.value)}
+            />
             {compilerError ? (
               <p role="status">Unable to load LaTeX compilers.</p>
             ) : (
@@ -129,11 +139,16 @@ export function App() {
             {compileResult?.success && compileResult.pdfPath ? (
               <p role="status">Compile succeeded: {compileResult.pdfPath}</p>
             ) : null}
+            {compileResult?.success && compileResult.log ? (
+              <section className="compile-log" aria-label="Compile log">
+                <pre>{compileResult.log}</pre>
+              </section>
+            ) : null}
             {compileResult && !compileResult.success ? (
-              <div role="status">
+              <section className="compile-log" aria-label="Compile log" role="status">
                 <p>Compile failed.</p>
                 <pre>{compileResult.log}</pre>
-              </div>
+              </section>
             ) : null}
           </div>
         </section>

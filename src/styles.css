@@ -22,6 +22,10 @@ button {
   font: inherit;
 }
 
+textarea {
+  font: inherit;
+}
+
 .app-shell {
   display: grid;
   grid-template-rows: 48px minmax(0, 1fr);
@@ -86,10 +90,62 @@ button {
   text-transform: uppercase;
 }
 
-.editor-placeholder,
+.editor-surface,
 .preview-placeholder,
 .file-list {
   padding: 14px;
+}
+
+.editor-surface {
+  display: grid;
+  gap: 12px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.source-editor {
+  width: 100%;
+  min-height: 260px;
+  resize: vertical;
+  border: 1px solid #cfd9de;
+  border-radius: 6px;
+  background: #fbfcfd;
+  color: #172026;
+  padding: 12px;
+  font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.source-editor:focus {
+  outline: 2px solid #1f9d93;
+  outline-offset: 2px;
+}
+
+.compile-log {
+  border: 1px solid #d9e1e5;
+  border-radius: 6px;
+  background: #f7f9fa;
+  padding: 10px;
+}
+
+.compile-log pre {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  color: #293940;
+  font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
 }
 
 .file-item {

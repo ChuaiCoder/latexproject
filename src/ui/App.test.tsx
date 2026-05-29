@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { compileLatexDocument, loadLatexCompilers } from "../backend/latexBackend";
@@ -82,6 +82,53 @@ describe("App", () => {
       });
     });
     expect(await screen.findByText("Compile succeeded: C:\\tmp\\main.pdf")).toBeInTheDocument();
+  });
+
+  it("compiles the current editor contents", async () => {
+    vi.mocked(loadLatexCompilers).mockResolvedValue([
+      { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" },
+    ]);
+    vi.mocked(compileLatexDocument).mockResolvedValue({
+      success: true,
+      log: "compiled edited document",
+      pdfPath: "C:\\tmp\\main.pdf",
+    });
+
+    render(<App />);
+
+    await screen.findByText("Default compiler: pdfLaTeX");
+    fireEvent.change(screen.getByLabelText("main.tex source"), {
+      target: {
+        value: "\\documentclass{article}\n\\begin{document}\nEdited source\n\\end{document}\n",
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /compile/i }));
+
+    await waitFor(() => {
+      expect(compileLatexDocument).toHaveBeenCalledWith({
+        compilerId: "pdflatex",
+        source: expect.stringContaining("Edited source"),
+      });
+    });
+  });
+
+  it("shows the compiler log after successful compiles", async () => {
+    vi.mocked(loadLatexCompilers).mockResolvedValue([
+      { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" },
+    ]);
+    vi.mocked(compileLatexDocument).mockResolvedValue({
+      success: true,
+      log: "Output written on main.pdf",
+      pdfPath: "C:\\tmp\\main.pdf",
+    });
+
+    render(<App />);
+
+    await screen.findByText("Default compiler: pdfLaTeX");
+    fireEvent.click(screen.getByRole("button", { name: /compile/i }));
+
+    const logPanel = await screen.findByRole("region", { name: "Compile log" });
+    expect(within(logPanel).getByText("Output written on main.pdf")).toBeInTheDocument();
   });
 
   it("shows compile failures from the backend", async () => {
