@@ -1,23 +1,32 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { compileLatexDocument, loadLatexCompilers } from "../backend/latexBackend";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { compileLatexDocument, loadLatexCompilers, loadLatexDependencyState } from "../backend/latexBackend";
+import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 
 vi.mock("../backend/latexBackend", () => ({
   compileLatexDocument: vi.fn(),
   loadLatexCompilers: vi.fn(),
+  loadLatexDependencyState: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
   convertFileSrc: vi.fn((path: string) => `asset://${path}`),
+  isTauri: vi.fn(() => true),
 }));
 
 describe("App", () => {
   beforeEach(() => {
     vi.mocked(compileLatexDocument).mockReset();
     vi.mocked(loadLatexCompilers).mockReset();
+    vi.mocked(loadLatexDependencyState).mockReset();
     vi.mocked(convertFileSrc).mockClear();
+    vi.mocked(isTauri).mockReturnValue(true);
+    vi.mocked(loadLatexDependencyState).mockResolvedValue({
+      toolchainsDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains",
+      packagesDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\packages",
+      managedToolchains: [],
+    });
   });
 
   it("shows the workbench shell with the default LaTeX compiler from the backend", async () => {
@@ -42,12 +51,51 @@ describe("App", () => {
     expect(screen.getByText("XeLaTeX: Missing (not found on PATH)")).toBeInTheDocument();
   });
 
+  it("shows where app-managed LaTeX dependencies are stored", async () => {
+    vi.mocked(loadLatexCompilers).mockResolvedValue([
+      { id: "pdflatex", label: "pdfLaTeX", isDefault: true, status: "installed" },
+    ]);
+    vi.mocked(loadLatexDependencyState).mockResolvedValue({
+      toolchainsDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains",
+      packagesDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\packages",
+      managedToolchains: [
+        {
+          id: "tectonic",
+          label: "Tectonic",
+          installDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains\\tectonic",
+          executablePath: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains\\tectonic\\tectonic.exe",
+          compilerIds: ["tectonic"],
+          status: "missing",
+        },
+      ],
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText("Managed dependencies")).toBeInTheDocument();
+    expect(screen.getByText("Toolchains: C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains")).toBeInTheDocument();
+    expect(screen.getByText("Packages: C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\packages")).toBeInTheDocument();
+    expect(screen.getByText("Tectonic: Missing")).toBeInTheDocument();
+  });
+
   it("shows a backend error when LaTeX compilers cannot be loaded", async () => {
     vi.mocked(loadLatexCompilers).mockRejectedValue(new Error("backend unavailable"));
 
     render(<App />);
 
     expect(await screen.findByText("Unable to load LaTeX compilers.")).toBeInTheDocument();
+  });
+
+  it("explains that compiling requires the Tauri desktop client", () => {
+    vi.mocked(isTauri).mockReturnValue(false);
+
+    render(<App />);
+
+    expect(screen.getByText("Desktop client required for LaTeX compilation.")).toBeInTheDocument();
+    expect(screen.getByText("Run npm run tauri dev to use the Rust compiler backend.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /compile/i })).toBeDisabled();
+    expect(loadLatexCompilers).not.toHaveBeenCalled();
+    expect(loadLatexDependencyState).not.toHaveBeenCalled();
   });
 
   it("shows when a LaTeX compiler detection times out", async () => {

@@ -1,19 +1,26 @@
 import { useEffect, useState } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import { Play } from "lucide-react";
-import { compileLatexDocument, loadLatexCompilers } from "../backend/latexBackend";
-import type { CompileLatexDocumentResult, LatexCompiler } from "../domain/latexCompiler";
+import { compileLatexDocument, loadLatexCompilers, loadLatexDependencyState } from "../backend/latexBackend";
+import type { CompileLatexDocumentResult, LatexCompiler, LatexDependencyState } from "../domain/latexCompiler";
 
 const STARTER_DOCUMENT = "\\documentclass{article}\n\\begin{document}\nHello from LaTeX Workbench.\n\\end{document}\n";
 
 export function App() {
   const [compilers, setCompilers] = useState<LatexCompiler[]>([]);
   const [compilerError, setCompilerError] = useState(false);
+  const [dependencyState, setDependencyState] = useState<LatexDependencyState | undefined>();
+  const [dependencyError, setDependencyError] = useState(false);
   const [compileResult, setCompileResult] = useState<CompileLatexDocumentResult | undefined>();
   const [isCompiling, setIsCompiling] = useState(false);
   const [source, setSource] = useState(STARTER_DOCUMENT);
+  const isDesktopClient = isTauri();
 
   useEffect(() => {
+    if (!isDesktopClient) {
+      return;
+    }
+
     let isMounted = true;
 
     loadLatexCompilers()
@@ -30,10 +37,24 @@ export function App() {
         }
       });
 
+    loadLatexDependencyState()
+      .then((loadedDependencyState) => {
+        if (isMounted) {
+          setDependencyState(loadedDependencyState);
+          setDependencyError(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setDependencyState(undefined);
+          setDependencyError(true);
+        }
+      });
+
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [isDesktopClient]);
 
   const selectedCompiler =
     compilers.find((compiler) => compiler.isDefault && compiler.status === "installed") ??
@@ -62,7 +83,7 @@ export function App() {
   };
 
   const handleCompile = async () => {
-    if (!selectedCompiler || isCompiling) {
+    if (!isDesktopClient || !selectedCompiler || isCompiling) {
       return;
     }
 
@@ -95,7 +116,7 @@ export function App() {
         <button
           className="compile-button"
           type="button"
-          disabled={!selectedCompiler || isCompiling}
+          disabled={!isDesktopClient || !selectedCompiler || isCompiling}
           onClick={handleCompile}
         >
           <Play size={16} aria-hidden="true" /> {isCompiling ? "Compiling" : "Compile"}
@@ -124,7 +145,12 @@ export function App() {
               value={source}
               onChange={(event) => setSource(event.target.value)}
             />
-            {compilerError ? (
+            {!isDesktopClient ? (
+              <section className="compile-log" aria-label="Desktop client notice" role="status">
+                <p>Desktop client required for LaTeX compilation.</p>
+                <pre>Run npm run tauri dev to use the Rust compiler backend.</pre>
+              </section>
+            ) : compilerError ? (
               <p role="status">Unable to load LaTeX compilers.</p>
             ) : (
               <>
@@ -139,6 +165,23 @@ export function App() {
                     ))}
                   </ul>
                 ) : null}
+                {dependencyState ? (
+                  <section className="dependency-status" aria-label="Managed LaTeX dependencies">
+                    <h2>Managed dependencies</h2>
+                    <p>Toolchains: {dependencyState.toolchainsDir}</p>
+                    <p>Packages: {dependencyState.packagesDir}</p>
+                    {dependencyState.managedToolchains.length > 0 ? (
+                      <ul className="compiler-status-list">
+                        {dependencyState.managedToolchains.map((toolchain) => (
+                          <li key={toolchain.id}>
+                            {toolchain.label}: {toolchain.status === "installed" ? "Installed" : "Missing"}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </section>
+                ) : null}
+                {dependencyError ? <p role="status">Unable to load managed LaTeX dependency state.</p> : null}
               </>
             )}
             {compileResult?.success && compileResult.pdfPath ? (

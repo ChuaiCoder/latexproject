@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri": "tauri"
+    "tauri": "node scripts/tauri-env.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.0.0",

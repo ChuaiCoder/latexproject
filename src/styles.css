@@ -201,6 +201,26 @@ textarea {
   font-size: 14px;
 }
 
+.dependency-status {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid #d9e1e5;
+  padding-top: 12px;
+}
+
+.dependency-status h2 {
+  margin: 0;
+  color: #293940;
+  font-size: 14px;
+}
+
+.dependency-status p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #52636b;
+  font-size: 13px;
+}
+
 @media (max-width: 900px) {
   .workspace {
     grid-template-columns: 1fr;

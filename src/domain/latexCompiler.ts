@@ -21,6 +21,23 @@ export interface CompileLatexDocumentResult {
   pdfPath?: string;
 }
 
+export type ManagedLatexToolchainStatus = "installed" | "missing";
+
+export interface ManagedLatexToolchain {
+  id: string;
+  label: string;
+  installDir: string;
+  executablePath: string;
+  compilerIds: LatexCompilerId[];
+  status: ManagedLatexToolchainStatus;
+}
+
+export interface LatexDependencyState {
+  toolchainsDir: string;
+  packagesDir: string;
+  managedToolchains: ManagedLatexToolchain[];
+}
+
 export function getPreferredCompiler(
   preference: string | null | undefined,
   availableCompilerIds: LatexCompilerId[],

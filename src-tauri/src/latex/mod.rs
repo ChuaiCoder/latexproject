@@ -49,11 +49,38 @@ pub struct CompileLatexDocumentResult {
     pub pdf_path: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ManagedLatexToolchainStatus {
+    Installed,
+    Missing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedLatexToolchain {
+    pub id: &'static str,
+    pub label: &'static str,
+    pub install_dir: String,
+    pub executable_path: String,
+    pub compiler_ids: &'static [&'static str],
+    pub status: ManagedLatexToolchainStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LatexDependencyState {
+    pub toolchains_dir: String,
+    pub packages_dir: String,
+    pub managed_toolchains: Vec<ManagedLatexToolchain>,
+}
+
 struct LatexCompilerDefinition {
     id: &'static str,
     label: &'static str,
     command: &'static str,
     args: &'static [&'static str],
+    managed_toolchain_id: Option<&'static str>,
 }
 
 const LATEX_COMPILER_DEFINITIONS: &[LatexCompilerDefinition] = &[
@@ -62,40 +89,64 @@ const LATEX_COMPILER_DEFINITIONS: &[LatexCompilerDefinition] = &[
         label: "pdfLaTeX",
         command: "pdflatex",
         args: &["-interaction=nonstopmode", "-halt-on-error", "main.tex"],
+        managed_toolchain_id: None,
     },
     LatexCompilerDefinition {
         id: "xelatex",
         label: "XeLaTeX",
         command: "xelatex",
         args: &["-interaction=nonstopmode", "-halt-on-error", "main.tex"],
+        managed_toolchain_id: None,
     },
     LatexCompilerDefinition {
         id: "lualatex",
         label: "LuaLaTeX",
         command: "lualatex",
         args: &["-interaction=nonstopmode", "-halt-on-error", "main.tex"],
+        managed_toolchain_id: None,
     },
     LatexCompilerDefinition {
         id: "tectonic",
         label: "Tectonic",
         command: "tectonic",
         args: &["main.tex"],
+        managed_toolchain_id: Some("tectonic"),
     },
 ];
 const COMPILE_RUN_RETENTION_LIMIT: usize = 5;
 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 static COMPILE_LOCK: Mutex<()> = Mutex::new(());
 
-pub fn available_compilers() -> Vec<LatexCompiler> {
-    detect_compilers(LATEX_COMPILER_DEFINITIONS)
+pub fn available_compilers(app_data_dir: Option<&Path>) -> Vec<LatexCompiler> {
+    detect_compilers(LATEX_COMPILER_DEFINITIONS, app_data_dir)
+}
+
+pub fn dependency_state(app_data_dir: &Path) -> Result<LatexDependencyState, String> {
+    let toolchains_dir = dependency_toolchains_dir(app_data_dir);
+    let packages_dir = dependency_packages_dir(app_data_dir);
+
+    fs::create_dir_all(&toolchains_dir).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&packages_dir).map_err(|error| error.to_string())?;
+
+    Ok(LatexDependencyState {
+        toolchains_dir: toolchains_dir.to_string_lossy().into_owned(),
+        packages_dir: packages_dir.to_string_lossy().into_owned(),
+        managed_toolchains: vec![managed_tectonic_toolchain(&toolchains_dir)],
+    })
 }
 
 pub fn compile_document(
     request: CompileLatexDocumentRequest,
     cache_root: &Path,
+    app_data_dir: Option<&Path>,
 ) -> CompileLatexDocumentResult {
     with_compile_lock(|| {
-        compile_document_for_definitions(request, cache_root, LATEX_COMPILER_DEFINITIONS)
+        compile_document_for_definitions(
+            request,
+            cache_root,
+            app_data_dir,
+            LATEX_COMPILER_DEFINITIONS,
+        )
     })
 }
 
@@ -109,6 +160,7 @@ fn with_compile_lock<T>(compile: impl FnOnce() -> T) -> T {
 fn compile_document_for_definitions(
     request: CompileLatexDocumentRequest,
     cache_root: &Path,
+    app_data_dir: Option<&Path>,
     definitions: &[LatexCompilerDefinition],
 ) -> CompileLatexDocumentResult {
     if request.source.len() > MAX_SOURCE_BYTES {
@@ -134,12 +186,13 @@ fn compile_document_for_definitions(
         Ok(working_dir) => working_dir,
         Err(error) => return failed_compile_result(error),
     };
+    let command = compiler_command(compiler, app_data_dir);
 
     match compile_document_with(
         request.compiler_id.as_str(),
         request.source.as_str(),
         &working_dir,
-        compiler.command,
+        command.as_str(),
         compiler.args,
         Duration::from_secs(20),
     ) {
@@ -154,20 +207,26 @@ struct EngineDetection {
     reason: LatexCompilerStatusReason,
 }
 
-fn detect_compilers(definitions: &'static [LatexCompilerDefinition]) -> Vec<LatexCompiler> {
-    detect_compilers_with(definitions, detect_compiler)
+fn detect_compilers(
+    definitions: &'static [LatexCompilerDefinition],
+    app_data_dir: Option<&Path>,
+) -> Vec<LatexCompiler> {
+    detect_compilers_with(definitions, |definition| {
+        let command = compiler_command(definition, app_data_dir);
+        detect_compiler(command.as_str())
+    })
 }
 
 fn detect_compilers_with(
     definitions: &'static [LatexCompilerDefinition],
-    detect: impl Fn(&str) -> EngineDetection + Copy + Send + Sync,
+    detect: impl Fn(&LatexCompilerDefinition) -> EngineDetection + Copy + Send + Sync,
 ) -> Vec<LatexCompiler> {
     thread::scope(|scope| {
         let detection_handles = definitions
             .iter()
             .map(|definition| {
                 scope.spawn(move || {
-                    let detection = detect(definition.command);
+                    let detection = detect(definition);
 
                     LatexCompiler {
                         id: definition.id,
@@ -391,12 +450,61 @@ fn failed_compile_result(log: String) -> CompileLatexDocumentResult {
     }
 }
 
+fn compiler_command(definition: &LatexCompilerDefinition, app_data_dir: Option<&Path>) -> String {
+    if let (Some(app_data_dir), Some("tectonic")) = (app_data_dir, definition.managed_toolchain_id)
+    {
+        let toolchains_dir = dependency_toolchains_dir(app_data_dir);
+        let managed_toolchain = managed_tectonic_toolchain(&toolchains_dir);
+
+        if managed_toolchain.status == ManagedLatexToolchainStatus::Installed {
+            return managed_toolchain.executable_path;
+        }
+    }
+
+    definition.command.to_string()
+}
+
+fn managed_tectonic_toolchain(toolchains_dir: &Path) -> ManagedLatexToolchain {
+    let install_dir = toolchains_dir.join("tectonic");
+    let executable_path = install_dir.join(executable_name("tectonic"));
+
+    ManagedLatexToolchain {
+        id: "tectonic",
+        label: "Tectonic",
+        install_dir: install_dir.to_string_lossy().into_owned(),
+        executable_path: executable_path.to_string_lossy().into_owned(),
+        compiler_ids: &["tectonic"],
+        status: if executable_path.exists() {
+            ManagedLatexToolchainStatus::Installed
+        } else {
+            ManagedLatexToolchainStatus::Missing
+        },
+    }
+}
+
+fn dependency_toolchains_dir(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join("dependencies").join("toolchains")
+}
+
+fn dependency_packages_dir(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join("dependencies").join("packages")
+}
+
+fn executable_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        compile_document_with, detect_compiler_with_timeout, detect_compilers_with,
-        prepare_working_dir, CompileLatexDocumentRequest, EngineDetection, LatexCompilerDefinition,
-        LatexCompilerStatus, LatexCompilerStatusReason,
+        compile_document_with, compiler_command, dependency_state, detect_compiler_with_timeout,
+        detect_compilers_with, executable_name, prepare_working_dir, CompileLatexDocumentRequest,
+        EngineDetection, LatexCompilerDefinition, LatexCompilerStatus, LatexCompilerStatusReason,
+        ManagedLatexToolchainStatus,
     };
     use std::fs;
     use std::path::Path;
@@ -429,12 +537,14 @@ mod tests {
                 label: "Slow A",
                 command: "slow-a",
                 args: &["main.tex"],
+                managed_toolchain_id: None,
             },
             LatexCompilerDefinition {
                 id: "slow-b",
                 label: "Slow B",
                 command: "slow-b",
                 args: &["main.tex"],
+                managed_toolchain_id: None,
             },
         ];
 
@@ -459,17 +569,19 @@ mod tests {
                 label: "Missing Default",
                 command: "missing-default",
                 args: &["main.tex"],
+                managed_toolchain_id: None,
             },
             LatexCompilerDefinition {
                 id: "installed-fallback",
                 label: "Installed Fallback",
                 command: "installed-fallback",
                 args: &["main.tex"],
+                managed_toolchain_id: None,
             },
         ];
 
-        let compilers = detect_compilers_with(DEFINITIONS, |command| {
-            if command == "installed-fallback" {
+        let compilers = detect_compilers_with(DEFINITIONS, |definition| {
+            if definition.command == "installed-fallback" {
                 EngineDetection {
                     status: LatexCompilerStatus::Installed,
                     reason: LatexCompilerStatusReason::Available,
@@ -488,7 +600,7 @@ mod tests {
 
     #[test]
     fn exposes_real_latex_compilers_not_distributions() {
-        let compilers = super::available_compilers();
+        let compilers = super::available_compilers(None);
 
         assert_eq!(
             compilers
@@ -498,6 +610,59 @@ mod tests {
             vec!["pdflatex", "xelatex", "lualatex", "tectonic"]
         );
         assert_eq!(compilers[0].label, "pdfLaTeX");
+    }
+
+    #[test]
+    fn managed_toolchain_executable_takes_precedence_over_path_command() {
+        let app_data_dir = unique_temp_dir("managed-tectonic-command");
+        let managed_executable = app_data_dir
+            .join("dependencies")
+            .join("toolchains")
+            .join("tectonic")
+            .join(executable_name("tectonic"));
+        fs::create_dir_all(
+            managed_executable
+                .parent()
+                .expect("managed executable should have parent"),
+        )
+        .expect("managed executable dir should be created");
+        fs::write(&managed_executable, "").expect("managed executable should be written");
+        let definition = LatexCompilerDefinition {
+            id: "tectonic",
+            label: "Tectonic",
+            command: "tectonic",
+            args: &["main.tex"],
+            managed_toolchain_id: Some("tectonic"),
+        };
+
+        let command = compiler_command(&definition, Some(&app_data_dir));
+
+        assert_eq!(command, managed_executable.to_string_lossy());
+
+        let _ = fs::remove_dir_all(app_data_dir);
+    }
+
+    #[test]
+    fn dependency_state_creates_app_managed_latex_directories() {
+        let app_data_dir = unique_temp_dir("dependency-state");
+
+        let state = dependency_state(&app_data_dir).expect("dependency state should load");
+
+        assert!(Path::new(&state.toolchains_dir).exists());
+        assert!(Path::new(&state.packages_dir).exists());
+        assert!(
+            state.toolchains_dir.ends_with("dependencies\\toolchains")
+                || state.toolchains_dir.ends_with("dependencies/toolchains")
+        );
+        assert_eq!(state.managed_toolchains.len(), 1);
+        assert_eq!(state.managed_toolchains[0].id, "tectonic");
+        assert_eq!(state.managed_toolchains[0].compiler_ids, &["tectonic"]);
+        assert_eq!(
+            state.managed_toolchains[0].status,
+            ManagedLatexToolchainStatus::Missing
+        );
+
+        let _ = fs::remove_dir_all(app_data_dir);
     }
 
     #[test]
@@ -568,6 +733,7 @@ mod tests {
             label: "Missing Compiler",
             command: "latex-workbench-missing-compiler-for-test",
             args: &["main.tex"],
+            managed_toolchain_id: None,
         }];
         let cache_root = unique_temp_dir("spawn-failure");
 
@@ -577,6 +743,7 @@ mod tests {
                 source: "\\documentclass{article}\\begin{document}Hi\\end{document}".to_string(),
             },
             &cache_root,
+            None,
             DEFINITIONS,
         );
 
@@ -667,6 +834,7 @@ mod tests {
                             .to_string(),
                     },
                     cache_root_ref,
+                    None,
                 );
                 returned_in_thread.store(true, Ordering::SeqCst);
                 result
@@ -693,6 +861,7 @@ mod tests {
             label: "pdfLaTeX",
             command: "pdflatex",
             args: &["main.tex"],
+            managed_toolchain_id: None,
         }];
         let cache_root = unique_temp_dir("oversized-source");
 
@@ -702,6 +871,7 @@ mod tests {
                 source: "x".repeat(super::MAX_SOURCE_BYTES + 1),
             },
             &cache_root,
+            None,
             DEFINITIONS,
         );
 

@@ -3,8 +3,11 @@ mod latex;
 use tauri::Manager;
 
 #[tauri::command]
-fn available_latex_compilers() -> Vec<latex::LatexCompiler> {
-    latex::available_compilers()
+fn available_latex_compilers(app: tauri::AppHandle) -> Vec<latex::LatexCompiler> {
+    match app.path().app_data_dir() {
+        Ok(app_data_dir) => latex::available_compilers(Some(&app_data_dir)),
+        Err(_) => latex::available_compilers(None),
+    }
 }
 
 #[tauri::command]
@@ -12,8 +15,14 @@ fn compile_latex_document(
     app: tauri::AppHandle,
     request: latex::CompileLatexDocumentRequest,
 ) -> latex::CompileLatexDocumentResult {
+    let app_data_dir = app.path().app_data_dir().ok();
+
     match app.path().app_cache_dir() {
-        Ok(cache_dir) => latex::compile_document(request, &cache_dir.join("compile-runs")),
+        Ok(cache_dir) => latex::compile_document(
+            request,
+            &cache_dir.join("compile-runs"),
+            app_data_dir.as_deref(),
+        ),
         Err(error) => latex::CompileLatexDocumentResult {
             success: false,
             log: error.to_string(),
@@ -22,12 +31,21 @@ fn compile_latex_document(
     }
 }
 
+#[tauri::command]
+fn latex_dependency_state(app: tauri::AppHandle) -> Result<latex::LatexDependencyState, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|error| error.to_string())
+        .and_then(|app_data_dir| latex::dependency_state(&app_data_dir))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             available_latex_compilers,
-            compile_latex_document
+            compile_latex_document,
+            latex_dependency_state
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -35,11 +53,11 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{available_latex_compilers, latex};
+    use super::latex;
 
     #[test]
     fn exposes_supported_latex_compilers() {
-        let compilers = available_latex_compilers();
+        let compilers = latex::available_compilers(None);
 
         assert_eq!(compilers.len(), 4);
         assert_eq!(compilers[0].id, "pdflatex");
@@ -61,7 +79,7 @@ mod tests {
 
     #[test]
     fn marks_first_installed_compiler_as_default_when_available() {
-        let compilers = available_latex_compilers();
+        let compilers = latex::available_compilers(None);
         let default_compilers = compilers
             .iter()
             .filter(|compiler| compiler.is_default)

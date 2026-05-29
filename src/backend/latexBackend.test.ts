@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   compileLatexDocument,
+  loadLatexDependencyState,
   loadLatexCompilers,
   resetLatexCompilersCacheForTests,
 } from "./latexBackend";
@@ -97,5 +98,28 @@ describe("latex backend client", () => {
       log: "compiled",
       pdfPath: "C:\\tmp\\main.pdf",
     });
+  });
+
+  it("loads the managed LaTeX dependency state through the Tauri command boundary", async () => {
+    const dependencyState = {
+      toolchainsDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains",
+      packagesDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\packages",
+      managedToolchains: [
+        {
+          id: "tectonic",
+          label: "Tectonic",
+          installDir: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains\\tectonic",
+          executablePath: "C:\\Users\\Dev\\AppData\\Local\\LatexWorkbench\\toolchains\\tectonic\\tectonic.exe",
+          compilerIds: ["tectonic"],
+          status: "missing",
+        },
+      ],
+    };
+    vi.mocked(invoke).mockResolvedValue(dependencyState);
+
+    const result = await loadLatexDependencyState();
+
+    expect(invoke).toHaveBeenCalledWith("latex_dependency_state");
+    expect(result).toEqual(dependencyState);
   });
 });
