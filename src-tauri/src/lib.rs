@@ -44,7 +44,6 @@ mod tests {
         assert_eq!(compilers.len(), 4);
         assert_eq!(compilers[0].id, "pdflatex");
         assert_eq!(compilers[0].label, "pdfLaTeX");
-        assert!(compilers[0].is_default);
         assert!(matches!(
             compilers[0].status,
             latex::LatexCompilerStatus::Installed | latex::LatexCompilerStatus::Missing
@@ -58,6 +57,23 @@ mod tests {
         ));
         assert_eq!(compilers[3].id, "tectonic");
         assert_eq!(compilers[3].label, "Tectonic");
-        assert!(!compilers[3].is_default);
+    }
+
+    #[test]
+    fn marks_first_installed_compiler_as_default_when_available() {
+        let compilers = available_latex_compilers();
+        let default_compilers = compilers
+            .iter()
+            .filter(|compiler| compiler.is_default)
+            .collect::<Vec<_>>();
+
+        if let Some(first_installed_compiler) = compilers
+            .iter()
+            .find(|compiler| compiler.status == latex::LatexCompilerStatus::Installed)
+        {
+            assert_eq!(default_compilers, vec![first_installed_compiler]);
+        } else {
+            assert!(default_compilers.is_empty());
+        }
     }
 }

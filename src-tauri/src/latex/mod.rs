@@ -83,6 +83,7 @@ const LATEX_COMPILER_DEFINITIONS: &[LatexCompilerDefinition] = &[
     },
 ];
 const COMPILE_RUN_RETENTION_LIMIT: usize = 5;
+const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 static COMPILE_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn available_compilers() -> Vec<LatexCompiler> {
@@ -110,6 +111,13 @@ fn compile_document_for_definitions(
     cache_root: &Path,
     definitions: &[LatexCompilerDefinition],
 ) -> CompileLatexDocumentResult {
+    if request.source.len() > MAX_SOURCE_BYTES {
+        return failed_compile_result(format!(
+            "Source is too large. Maximum supported size is {} bytes.",
+            MAX_SOURCE_BYTES
+        ));
+    }
+
     let compiler = match definitions
         .iter()
         .find(|compiler| compiler.id == request.compiler_id)
@@ -676,6 +684,31 @@ mod tests {
         assert!(returned.load(Ordering::SeqCst));
 
         let _ = fs::remove_dir_all(cache_root);
+    }
+
+    #[test]
+    fn rejects_source_that_exceeds_compile_request_limit() {
+        static DEFINITIONS: &[LatexCompilerDefinition] = &[LatexCompilerDefinition {
+            id: "pdflatex",
+            label: "pdfLaTeX",
+            command: "pdflatex",
+            args: &["main.tex"],
+        }];
+        let cache_root = unique_temp_dir("oversized-source");
+
+        let result = super::compile_document_for_definitions(
+            CompileLatexDocumentRequest {
+                compiler_id: "pdflatex".to_string(),
+                source: "x".repeat(super::MAX_SOURCE_BYTES + 1),
+            },
+            &cache_root,
+            DEFINITIONS,
+        );
+
+        assert!(!result.success);
+        assert!(result.pdf_path.is_none());
+        assert!(result.log.contains("Source is too large"));
+        assert!(!cache_root.exists());
     }
 
     fn unique_temp_dir(name: &str) -> std::path::PathBuf {
