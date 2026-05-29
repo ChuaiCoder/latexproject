@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -81,6 +82,8 @@ const LATEX_COMPILER_DEFINITIONS: &[LatexCompilerDefinition] = &[
         args: &["main.tex"],
     },
 ];
+const COMPILE_RUN_RETENTION_LIMIT: usize = 5;
+static COMPILE_LOCK: Mutex<()> = Mutex::new(());
 
 pub fn available_compilers() -> Vec<LatexCompiler> {
     detect_compilers(LATEX_COMPILER_DEFINITIONS)
@@ -90,7 +93,16 @@ pub fn compile_document(
     request: CompileLatexDocumentRequest,
     cache_root: &Path,
 ) -> CompileLatexDocumentResult {
-    compile_document_for_definitions(request, cache_root, LATEX_COMPILER_DEFINITIONS)
+    with_compile_lock(|| {
+        compile_document_for_definitions(request, cache_root, LATEX_COMPILER_DEFINITIONS)
+    })
+}
+
+fn with_compile_lock<T>(compile: impl FnOnce() -> T) -> T {
+    let _guard = COMPILE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    compile()
 }
 
 fn compile_document_for_definitions(
@@ -317,13 +329,15 @@ fn format_process_log(stdout: &[u8], stderr: &[u8]) -> String {
 
 fn prepare_working_dir(cache_root: &Path) -> Result<PathBuf, String> {
     fs::create_dir_all(cache_root).map_err(|error| error.to_string())?;
-    prune_compile_runs(cache_root)?;
     let working_dir = unique_working_dir_in(cache_root)?;
     fs::create_dir_all(&working_dir).map_err(|error| error.to_string())?;
+    prune_compile_runs(cache_root, COMPILE_RUN_RETENTION_LIMIT)?;
     Ok(working_dir)
 }
 
-fn prune_compile_runs(cache_root: &Path) -> Result<(), String> {
+fn prune_compile_runs(cache_root: &Path, retention_limit: usize) -> Result<(), String> {
+    let mut compile_runs = Vec::new();
+
     for entry in fs::read_dir(cache_root).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
         let path = entry.path();
@@ -333,8 +347,20 @@ fn prune_compile_runs(cache_root: &Path) -> Result<(), String> {
             .is_some_and(|name| name.starts_with("run-"));
 
         if path.is_dir() && is_compile_run {
-            fs::remove_dir_all(&path).map_err(|error| error.to_string())?;
+            let modified_at = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH);
+            let file_name = entry.file_name();
+            compile_runs.push((modified_at, file_name, path));
         }
+    }
+
+    compile_runs.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+    let runs_to_remove = compile_runs.len().saturating_sub(retention_limit);
+    for (_, _, path) in compile_runs.into_iter().take(runs_to_remove) {
+        fs::remove_dir_all(&path).map_err(|error| error.to_string())?;
     }
 
     Ok(())
@@ -366,6 +392,10 @@ mod tests {
     };
     use std::fs;
     use std::path::Path;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -550,18 +580,100 @@ mod tests {
     }
 
     #[test]
-    fn creates_compile_runs_under_cache_root_and_prunes_old_runs() {
+    fn preserves_existing_compile_run_output_for_preview() {
         let cache_root = unique_temp_dir("compile-cache");
-        let old_run = cache_root.join("run-old");
+        let previous_run = cache_root.join("run-previous");
         let unrelated_dir = cache_root.join("other");
-        fs::create_dir_all(&old_run).expect("old run should be created");
+        fs::create_dir_all(&previous_run).expect("previous run should be created");
+        fs::write(previous_run.join("main.pdf"), "PDF").expect("previous PDF should be written");
         fs::create_dir_all(&unrelated_dir).expect("unrelated dir should be created");
 
         let working_dir = prepare_working_dir(&cache_root).expect("working dir should be prepared");
 
         assert!(working_dir.starts_with(&cache_root));
-        assert!(!old_run.exists());
+        assert!(previous_run.join("main.pdf").exists());
         assert!(unrelated_dir.exists());
+
+        let _ = fs::remove_dir_all(cache_root);
+    }
+
+    #[test]
+    fn prunes_oldest_compile_runs_beyond_retention_limit() {
+        let cache_root = unique_temp_dir("compile-cache-retention");
+        fs::create_dir_all(&cache_root).expect("cache root should be created");
+
+        let old_run = cache_root.join("run-0");
+        fs::create_dir_all(&old_run).expect("old run should be created");
+        thread::sleep(Duration::from_millis(20));
+
+        let mut recent_runs = Vec::new();
+        for index in 1..=5 {
+            let run = cache_root.join(format!("run-{index}"));
+            fs::create_dir_all(&run).expect("recent run should be created");
+            fs::write(run.join("main.pdf"), "PDF").expect("recent PDF should be written");
+            recent_runs.push(run);
+            thread::sleep(Duration::from_millis(20));
+        }
+
+        let working_dir = prepare_working_dir(&cache_root).expect("working dir should be prepared");
+        let retained_runs = fs::read_dir(&cache_root)
+            .expect("cache root should be readable")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.path().is_dir()
+                    && entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with("run-"))
+            })
+            .count();
+
+        assert!(working_dir.starts_with(&cache_root));
+        assert!(!old_run.exists());
+        assert!(recent_runs
+            .last()
+            .expect("recent runs should exist")
+            .join("main.pdf")
+            .exists());
+        assert_eq!(retained_runs, 5);
+
+        let _ = fs::remove_dir_all(cache_root);
+    }
+
+    #[test]
+    fn compile_document_waits_for_existing_compile_lock() {
+        let cache_root = unique_temp_dir("serialized-compiles");
+        let returned = Arc::new(AtomicBool::new(false));
+        let compile_guard = super::COMPILE_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        thread::scope(|scope| {
+            let returned_in_thread = Arc::clone(&returned);
+            let cache_root_ref = &cache_root;
+            let compile = scope.spawn(move || {
+                let result = super::compile_document(
+                    CompileLatexDocumentRequest {
+                        compiler_id: "unsupported".to_string(),
+                        source: "\\documentclass{article}\\begin{document}Hi\\end{document}"
+                            .to_string(),
+                    },
+                    cache_root_ref,
+                );
+                returned_in_thread.store(true, Ordering::SeqCst);
+                result
+            });
+
+            thread::sleep(Duration::from_millis(50));
+            assert!(!returned.load(Ordering::SeqCst));
+            drop(compile_guard);
+
+            let result = compile.join().expect("compile should not panic");
+            assert!(!result.success);
+            assert!(result.log.contains("Unsupported LaTeX compiler"));
+        });
+
+        assert!(returned.load(Ordering::SeqCst));
 
         let _ = fs::remove_dir_all(cache_root);
     }
